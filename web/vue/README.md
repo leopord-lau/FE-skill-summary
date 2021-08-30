@@ -320,3 +320,475 @@ computed: {
 <div v-bind:class="{ active: isActive }"></div>
 ```
 active就是一个class属性值，这个class存在与否将取决于数据 `isActive` 的 truthiness。
+
+你可以在对象中传入更多字段来动态切换多个 class。此外，v-bind:class 指令也可以与普通的 class attribute 共存。
+
+```html
+<div
+  class="static"
+  v-bind:class="{ active: isActive, 'text-danger': hasError }"
+></div>
+
+<script>
+export default {
+  data() {
+    return {
+      isActive: true,
+      hasError: false
+    }
+  }
+}
+</script>
+```
+
+结果渲染为：
+```html
+<div class="static active"></div>
+```
+当 isActive 或者 hasError 变化时，class 列表将相应地更新。
+
+绑定一个返回对象的计算属性。
+```html
+<div v-bind:class="classObject"></div>
+
+<script>
+export default {
+  data() {
+    return {
+      isActive: true,
+      hasError: false
+    }
+  },
+  computed: {
+    classObject: function () {
+      return {
+        active: this.isActive && !this.error,
+        'text-danger': this.error && this.error.type === 'fatal'
+      }
+    }
+  }
+}
+</script>
+```
+
+**数组语法**
+`v-bind:class`上绑定一个数组。
+```html
+<div v-bind:class="[activeClass, errorClass]"></div>
+
+<script>
+export default {
+  data() {
+    return {
+      activeClass: 'active',
+      errorClass: 'text-danger'
+    }
+  }
+}
+</script>
+```
+
+### 绑定内联样式
+
+**对象语法**
+`v-bind:style` 的对象语法十分直观——看着非常像 CSS，但其实是一个 JavaScript 对象。CSS property 名可以用驼峰式 (camelCase) 或短横线分隔 (kebab-case，记得用引号括起来) 来命名。
+```html
+<div v-bind:style="{ color: activeColor, fontSize: fontSize + 'px' }"></div>
+<script>
+export default {
+  data() {
+    return {
+      activeColor: 'red',
+      fontSize: 30
+    }
+  }
+}
+</script>
+```
+直接绑定到对象上：
+```html
+<div v-bind:style="styleObject"></div>
+<script>
+export default {
+  data() {
+    return {
+      styleObject: {
+        activeColor: 'red',
+        fontSize: 30
+      }
+    }
+  }
+}
+</script>
+```
+
+绑定多个样式对象：
+```html
+<div v-bind:style="[baseStyles, overridingStyles]"></div>
+```
+
+## 6、条件渲染
+
+### `v-if`
+`v-if` 指令用于条件性地渲染一块内容。这块内容只会在指令的表达式返回 `truthy` 值的时候被渲染。
+```html
+<h1 v-if="awesome">Vue is awesome!</h1>
+```
+也可以用 `v-else` 添加一个“else 块”：
+```html
+<h1 v-if="awesome">Vue is awesome!</h1>
+<h1 v-else>Oh no</h1>
+```
+`v-else` 元素必须紧跟在带 `v-if` 或者 `v-else-if` 的元素的后面，否则它将不会被识别。
+
+**`v-else-if`**
+`v-else-if`，顾名思义，充当 `v-if` 的“`else-if` 块”，可以连续使用。
+```html
+<div v-if="type === 'A'">
+  A
+</div>
+<div v-else-if="type === 'B'">
+  B
+</div>
+<div v-else-if="type === 'C'">
+  C
+</div>
+<div v-else>
+  Not A/B/C
+</div>
+```
+
+类似于 `v-else`，`v-else-if` 也必须紧跟在带 `v-if` 或者`v-else-if` 的元素之后。
+
+
+**用`key`管理可复用的元素**
+
+Vue 会尽可能高效地渲染元素，通常会复用已有元素而不是从头开始渲染。
+```html
+<template v-if="loginType === 'username'">
+  <label>Username</label>
+  <input placeholder="Enter your username">
+</template>
+<template v-else>
+  <label>Email</label>
+  <input placeholder="Enter your email address">
+</template>
+```
+那么在上面的代码中切换 `loginType` 将不会清除用户已经输入的内容。因为两个模板使用了相同的元素，\<input> 不会被替换掉——仅仅是替换了它的 `placeholder`。
+
+这样也不总是符合实际需求，所以 `Vue` 为你提供了一种方式来表达“这两个元素是完全独立的，不要复用它们”。只需添加一个具有唯一值的 `key`属性即可。
+```html
+<template v-if="loginType === 'username'">
+  <label>Username</label>
+  <input placeholder="Enter your username" key="username-input">
+</template>
+<template v-else>
+  <label>Email</label>
+  <input placeholder="Enter your email address" key="email-input">
+</template>
+```
+注意，\<label> 元素仍然会被高效地复用，因为它们没有添加 key 属性。
+
+### `v-show`
+另一个用于根据条件展示元素的选项是 v-show 指令。用法大致一样：
+```html
+<h1 v-show="ok">Hello!</h1>
+```
+不同的是带有 `v-show` 的元素始终会被渲染并保留在 `DOM`中。`v-show` 只是简单地切换元素的 CSS property display。
+
+> 注意，v-show 不支持 \<template> 元素，也不支持 v-else。
+
+### `v-if` vs `v-show`
+
+`v-if` 是“真正”的条件渲染，因为它会确保在切换过程中条件块内的事件监听器和子组件适当地被销毁和重建。
+
+`v-if` 也是惰性的：如果在初始渲染时条件为假，则什么也不做——直到条件第一次变为真时，才会开始渲染条件块,此时`dom`树上才会出现对应的元素。
+
+相比之下，`v-show` 就简单得多——不管初始条件是什么，元素总是会被渲染（`dom`树上一直都有，只不过元素的`display`值在`false`的情况下为`none`），并且只是简单地基于 CSS 进行切换。
+
+一般来说，`v-if` 有更高的切换开销，而 `v-show` 有更高的初始渲染开销。因此，如果需要非常频繁地切换，则使用 `v-show` 较好；如果在运行时条件很少改变，则使用 `v-if` 较好。
+
+
+### `v-if`与`v-for`
+> 不推荐同时使用 `v-if` 和 `v-for`
+
+当 `v-if` 与` v-for `一起使用时，`v-for `具有比 `v-if `更高的优先级
+
+
+
+
+## 7、列表渲染
+
+### 用`v-for`将数组渲染为一组元素。
+> v-for 指令需要使用 item in items 形式的特殊语法，其中 items 是源数据数组，而 item 则是被迭代的数组元素的别名。
+
+```html
+<ul id="example-1">
+  <li v-for="item in items" :key="item.message">
+    {{ item.message }}
+  </li>
+</ul>
+<script>
+export default {
+  data() {
+    return {
+      items: [
+        { message: 'Foo' },
+        { message: 'Bar' }
+      ]
+    }
+  }
+}
+</script>
+```
+
+在 `v-for` 块中，我们可以访问所有父作用域的 property。`v-for` 还支持一个可选的第二个参数，即当前项的索引。
+```html
+<ul id="example-1">
+  <li v-for="(item, index) in items" :key="index">
+    {{ item.message }}
+  </li>
+</ul>
+<script>
+```
+
+
+也可以用 `of` 替代 `in` 作为分隔符.
+```html
+<ul id="example-1">
+  <li v-for="item of items" :key="item.message">
+    {{ item.message }}
+  </li>
+</ul>
+<script>
+```
+
+**`key`**
+
+在上面的几个片段中，可以标签都有一个key属性。
+`key`主要用于vue的虚拟DOM算法，在新旧 nodes 对比时辨识 VNodes。如果不使用 `key`，Vue 会使用一种最大限度减少动态元素并且尽可能的尝试就地修改/复用相同类型元素的算法。而使用 `key` 时，它会基于 `key` 的变化重新排列元素顺序，并且会移除 `key` 不存在的元素。
+
+有相同父元素的子元素必须有独特的 `key`。重复的 `key` 会造成渲染错误。
+
+`key`也可以用于强制替换元素/组件而不是重复使用它.
+当你遇到如下场景时它可能会很有用：
+- 完整地触发组件的生命周期钩子
+- 触发过渡
+
+```html
+<transition>
+  <span :key="text">{{ text }}</span>
+</transition>
+```
+当 `text` 发生改变时，\<span> 总是会被替换而不是被修改，因此会触发过渡。
+
+### 在`v-for`中使用对象
+
+```html
+<ul id="example-1">
+  <li v-for="item in object">
+    {{ item }}
+  </li>
+</ul>
+<script>
+export default {
+  data() {
+    return {
+      object: {
+        title: 'How to do lists in Vue',
+        author: 'Jane Doe',
+        publishedAt: '2016-04-10'
+      }
+    }
+  }
+}
+</script>
+```
+第二个的参数为 property 名称 (也就是键名).
+
+```html
+<ul id="example-1">
+  <li v-for="(item, value) in object">
+    {{ item }} - {{value}}
+  </li>
+</ul>
+<script>
+export default {
+  data() {
+    return {
+      object: {
+        title: 'How to do lists in Vue',
+        author: 'Jane Doe',
+        publishedAt: '2016-04-10'
+      }
+    }
+  }
+}
+</script>
+```
+
+第三个参数为索引：
+```html
+<ul id="example-1">
+  <li v-for="(item, value, index) in object">
+    {{ item }} - {{value}} - {{index}}
+  </li>
+</ul>
+<script>
+export default {
+  data() {
+    return {
+      object: {
+        title: 'How to do lists in Vue',
+        author: 'Jane Doe',
+        publishedAt: '2016-04-10'
+      }
+    }
+  }
+}
+</script>
+```
+
+### 维护状态
+
+当 Vue 正在更新使用 `v-for` 渲染的元素列表时，它默认使用“就地更新”的策略。如果数据项的顺序被改变，Vue 将不会移动 DOM 元素来匹配数据项的顺序，而是就地更新每个元素，并且确保它们在每个索引位置正确渲染。这个类似 `Vue 1.x` 的 `track-by="$index`"。
+
+这个默认的模式是高效的，但是只适用于不依赖子组件状态或临时 DOM 状态 (例如：表单输入值) 的列表渲染输出。
+
+为了给 Vue 一个提示，以便它能跟踪每个节点的身份，从而重用和重新排序现有元素，你需要为每项提供一个唯一 `key`属性。
+
+### 数组更新检测
+
+**变更方法**
+
+Vue 将被侦听的数组的变更方法进行了包裹，所以它们也将会触发视图更新。这些被包裹过的方法包括：
+- push
+- pop
+- shift
+- unshift
+- splice
+- sort
+- reverse
+
+**替换数组**
+变更方法，顾名思义，会变更调用了这些方法的原始数组。相比之下，也有非变更方法，例如 filter()、concat() 和 slice()。它们不会变更原始数组，而总是返回一个新数组。当使用非变更方法时，可以用新数组替换旧数组：
+```js
+example1.items = example1.items.filter(function (item) {
+  return item.message.match(/Foo/)
+})
+```
+
+你可能认为这将导致 Vue 丢弃现有 DOM 并重新渲染整个列表。幸运的是，事实并非如此。Vue 为了使得 DOM 元素得到最大范围的重用而实现了一些智能的启发式方法，所以用一个含有相同元素的数组去替换原来的数组是非常高效的操作。
+
+**注意事项**
+
+由于 JavaScript 的限制，Vue 不能检测数组和对象的变化。
+
+### 显示过滤 / 排序后的结果
+
+当我们需要过滤数据后才进行展示，可以使用一下方式：
+1. 计算属性
+```html
+<li v-for="n in evenNumbers">{{ n }}</li>
+<script>
+export default {
+  data() {
+    return {
+      numbers: [1, 2, 3, 4, 5]
+    }
+  },
+  computed: {
+    evenNumbers: function() {
+      return this.numbers.filter(function (number) {
+        return number % 2 === 0
+      })
+    }
+  }
+}
+</script>
+```
+2. 嵌套`v-for`
+```html
+<ul v-for="set in sets">
+  <li v-for="n in even(set)">{{ n }}</li>
+</ul>
+<script>
+export default {
+  data() {
+    return {
+      numbers: [[ 1, 2, 3, 4, 5 ], [6, 7, 8, 9, 10]]
+    }
+  },
+  computed: {
+    even: function(numbers) {
+      return numbers.filter(function (number) {
+        return number % 2 === 0
+      })
+    }
+  }
+}
+</script>
+```
+
+### `v-for`使用值
+
+`v-for` 也可以接受整数。在这种情况下，它会把模板重复对应次数。
+```html
+<div>
+  <span v-for="n in 10">{{ n }} </span>
+</div>
+```
+
+### 在\<template>中使用`v-for`
+利用带有 `v-for`的 \<template> 来循环渲染一段包含多个元素的内容。
+
+```html
+<ul>
+  <template v-for="item in items">
+    <li>{{ item.msg }}</li>
+    <li class="divider" role="presentation"></li>
+  </template>
+</ul>
+```
+
+### 在组件上使用`v-for`
+
+在自定义组件上，你可以像在任何普通元素上一样使用 `v-for`。
+```html
+<my-component v-for="item in items" :key="item.id"></my-component>
+```
+
+然而，任何数据都不会被自动传递到组件里，因为组件有自己独立的作用域。为了把迭代数据传递到组件里，我们要使用 `prop`：
+
+```html
+<myComponent v-for="item in items" :key="item.id" :title="item.message"></myComponent>
+
+<script>
+export default {
+  components:{myComponent},
+  data() {
+    return {
+      items: [
+        { message: 'Foo' },
+        { message: 'Bar' }
+      ]
+    }
+  }
+}
+</script>
+```
+
+myComponent.vue
+```html
+<template>
+  <div>
+    <button>{{title}}</button>
+  </div>
+</template>
+
+<script>
+export default {
+  props: ['title']
+}
+</script>
+```
