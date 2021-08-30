@@ -25,6 +25,323 @@ data.a = 3;
 console.log(vm.a)              // 3
 ```
 
+### 数据响应式源码解析
+
+#### 编写一个mini观察器
+
+可能大部分人都已知道了Vue2.0是采用`Object.defineProperty()`这个API进行实现。
+`Object.defineProperty`的使用
+```js
+var data={}
+Object.defineProperty(data,'name',{
+  get:function(){
+    return value
+  },
+  set:function(newValue){
+    value=newValue
+  }
+})
+//如果不为属性设置初始值，就会报错。所以在使用时需要为data中的属性设置‘’这个空的初始化值。
+data.name='leo' 
+```
+
+在页面上进行响应:
+```html
+<div id="app">
+  <p>你好，<span id='name'></span></p>
+</div>
+<script>
+var obj = {};
+// 数据劫持
+Object.defineProperty(obj, "name", {
+  get() {
+    console.log('获取name')
+    return document.querySelector('#name').innerHTML;
+  },
+  set(nick) {
+    console.log('设置name')
+    document.querySelector('#name').innerHTML = nick;
+  }
+});
+console.log(obj.name);   
+obj.name = "leo";
+console.log(obj.name)
+</script>
+```
+
+理解了`Object.defineProperty()`的使用后，现在我们从0开始通过`Object.defineProperty()`编写一个mini观察器来理解Vue响应式的原理思路。
+
+1. getter和setter
+实现一个转换函数（或者说是拦截函数），对对象中的属性进行`set`和`get`.
+```js
+function observe(obj) {
+  // 遍历data中的所有键
+  Object.keys(obj).forEach(key => {
+    // 获取键对应的值
+    let value = obj[key];
+    Object.defineProperty(obj, key, {
+      get() {
+        console.log(`${key}': `, value);
+        return value;
+      },
+      set(newVal) {
+        console.log(`set ${newVal} to ${key}`);
+        value = newVal;
+      }
+    })
+  })
+}
+```
+
+2. 依赖收集
+就是追踪当`data`改变时哪些代码应该执行。
+定义一个Dep类，至少应该包含`depend`（收集）和 `notify`（唤醒）这两个方法。
+```js
+class Dep {
+  constructor() {
+    // 定义一个数组用于保存已经收集到更新方法
+    this.subs = new Set();
+  }
+  depend(dep) { 
+    if(dep) {
+      this.subs.add(dep);
+    }
+  }
+  notify() {
+    // 执行所有收集到的更新方法
+    this.subs.forEach(sub => sub());
+  }
+}
+```
+
+那么依赖是在什么时候收集的呢？
+其实某段代码在调用data中的值的时候对这个代码块进行收集。
+比如说我们在`observe`上下文中用到了data中的某个值，那么这时候收集到的代码块应该是整片代码：
+修改`dep.js`中的更新方法：
+```js
+// dep.js
+class Dep {
+  constructor() {
+    // 定义一个数组用于保存已经收集到更新方法
+    this.subs = new Set();
+  }
+  depend(dep) { 
+    this.subs.add(dep);
+  }
+  notify() {
+    // 执行所有收集到的更新方法
+    this.subs.forEach(function(sub) {
+      // 调用收集到的代码块中的update方法
+      sub.update()
+    });
+  }
+}
+```
+
+```js
+// observe.js
+// 定义上下文
+let context = this;
+
+function observe(obj) {
+  // 遍历data中的所有键
+  Object.keys(obj).forEach(key => {
+    // 获取键对应的值
+    let value = obj[key];
+    let dep = new Dep();
+    Object.defineProperty(obj, key, {
+      get() {
+        // 收集，是哪块代码在进行收集
+        dep.depend(context);
+        console.log(`${key}': `, value);
+        return value;
+      },
+      set(newVal) {
+        if(value !== newVal) {
+          console.log(`set ${newVal} to ${key}`);
+          value = newVal;
+          // 更新
+          dep.notify();
+        }
+      }
+    })
+  })
+}
+
+// 定义数据
+const obj = {
+  count: 0
+}
+observe(obj);
+
+// 在observe文件中调用了data中的值
+console.log(obj.count);
+
+// 更新方法
+function update() {
+  console.log("updated")
+  console.log(obj.count);
+}
+
+// 更改值，此时就会触发更新
+obj.count = 2;
+```
+为了更方便我们传入上下文，我们创建一个`watcher`来监听一下。
+```js
+// watcher.js
+class Watcher {
+  constructor(key) {
+    Dep.target = this;
+    this.key = key;
+  }
+  update() {
+    console.log(`属性${this.key}更新了`);
+  }
+}
+```
+
+更改一下`observe`的依赖收集信息：
+```js
+// observe.js
+function observe(obj) {
+  Object.keys(obj).forEach(key => {
+    let value = obj[key];
+    let dep = new Dep();
+    Object.defineProperty(obj, key, {
+      get() {
+        // 更改
+        Dep.target && dep.depend(Dep.target);
+        console.log(`${key}': `, value);
+        return value;
+      },
+      set(newVal) {
+        if(value !== newVal) {
+          console.log(`set ${newVal} to ${key}`);
+          value = newVal;
+          dep.notify();
+        }
+      }
+    })
+  })
+}
+
+const obj = {
+  count: 0
+}
+observe(obj);
+
+// 传入需要监听的代码块
+new Watcher(this, "count");
+
+// 触发收集
+console.log(obj.count);
+
+// 触发更新
+obj.count = 2;
+```
+
+理解了大概的思路后我们就把上面这些代码完善一下，实现自己的vue响应式代码。
+```js
+class Leo {
+  constructor(options) {
+    this.$options = options;
+    this.$data = options.data;
+    // 进行响应化
+    this.observe(this.$data);
+  }
+
+  observe(value) {
+    // 对象类型
+    if(!value || typeof value !== 'object') {
+      return;
+    }
+    Object.keys(value).forEach(key => {
+      // 响应化
+      this.defineReactive(value, key, value[key]);
+      
+      // 执行代理
+      this.proxyData(key);
+    })
+  }
+  defineReactive(obj, key, val) {
+    // 递归
+    this.observe(val);
+
+    const dep = new Dep();
+
+    Object.defineProperty(obj, key, {
+      get() {
+        Dep.target && dep.addDep(Dep.target);
+        return val;
+      },
+      set(newVal) {
+        if(newVal === val) {
+          return;
+        }
+        val = newVal;
+        dep.notify();
+      } 
+    })
+  }
+  
+  proxyData(key) {
+    // 在实例上定义属性的话是需要this.$data.xxx的方法，我们采用defineProperty方式进行代理，使得能够通过this.xxx 进行处理
+    Object.defineProperty(this, key, {
+      get() {
+        return this.$data[key];
+      },
+      set(newVal) {
+        this.$data[key] = newVal;
+      }
+    })
+  }
+}
+
+class Dep {
+  constructor() {
+    this.deps = [];
+  }
+  addDep(dep) {
+    this.deps.push(dep);
+  }
+  notify() {
+    this.deps.forEach(dep => dep.update())
+  }
+}
+
+class Watcher {
+  constructor(key) {
+    // console.log(context);
+    Dep.target = this;
+    this.key = key;
+  }
+  update() {
+    console.log(`属性${this.key}更新了`);
+  }
+}
+```
+由于目前还没有实现编译部分代码，所以对于`watcher`的监听只能局限与实例里边，`watcher`创建代码如下：
+```js
+class Leo {
+  constructor(options) {
+    // ...
+    // 代码测试
+    new Watcher(this, 'test');
+    this.test
+  }
+  // ...
+}
+
+// 测试
+const leo = new Leo({
+  data: {
+    test: "test"
+  }
+})
+leo.test = 'change'
+```
+
+
 ## 3. 模板语法
 Vue.js 使用了基于 HTML 的模板语法，允许开发者声明式地将 DOM 绑定至底层 Vue 实例的数据。所有 Vue.js 的模板都是合法的 HTML，所以能被遵循规范的浏览器和 HTML 解析器解析。
 
