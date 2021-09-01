@@ -341,6 +341,248 @@ const leo = new Leo({
 leo.test = 'change'
 ```
 
+经过上面的代码，你应该对Vue的响应式有一定的理解了，现在我们将开始讲解Vue的响应式源码。
+
+#### 数据响应式源码
+Vue一大特点是数据响应式，数据的变化会作用于UI而不用进行DOM操作。原理上来讲，是利用了JS语言特性`Object.defineProperty()`，通过定义对象属性`setter`方法拦截对象属性变更，从而将数值的变化转换为UI的变化。
+
+具体实现是在Vue初始化时，会调用`initState`，它会初始化`data`，`props`等，这里着重关注`data`初始化.
+
+初始化数据源码目录：`src/core/instance/state.js`
+
+核心代码便是`initData`:
+```js
+function initData (vm: Component) { // 初始化数据
+  let data = vm.$options.data // 获取data
+  data = vm._data = typeof data === 'function' // data(){return {}} 这种情况跟 data:{} 这种
+    ? getData(data, vm)
+    : data || {}
+  
+  // ..
+  
+  // proxy data on instance // 将data代理到实例上
+  proxy(vm, `_data`, key) // 代理，通过this.dataName就可以直接访问定义的数据，而不用通过this.$data.dataName
+  // observe data
+  
+  // ..
+
+  observe(data, true /* asRootData */) // 执行数据的响应化
+}
+```
+
+core/observer/index.js
+observe方法返回一个`Observer`实例
+```js
+function observe (value: any, asRootData: ?boolean): Observer | void {  // 返回一个Observer实例,一个data对应这一个__ob__(有value，dep这两者个数相同)
+
+  // ..
+
+  ob = new Observer(value) // 新建一个Observer实例，通过将这个实例添加在value的__ob__属性中
+
+  // ..
+
+  return ob
+}
+```
+
+core/observer/index.js
+Observer对象根据数据类型执行对应的响应化操作
+
+```js
+class Observer {
+  value: any;
+  dep: Dep;
+  vmCount: number; // number of vms that have this object as root $data
+
+  constructor (value: any) {
+    this.value = value // data本身
+    // 最开始是data调用了一次
+    this.dep = new Dep() // dependence 依赖收集，data中的每一个键都对应着一个dep
+
+    // ..
+
+    def(value, '__ob__', this) // 定义一个property 设置_ob__,它的值就是Observer实例
+    if (Array.isArray(value)) { // data中可能具有object或者array类型的数据，需要进行不同的处理方式
+      
+      // ..
+
+      // 循环遍历所有的value进行observe操作
+      this.observeArray(value)
+    } else {
+      this.walk(value) // 如果不是array类型，就直接进行操作
+    }
+  }
+
+  // 处理对象类型数据
+  walk (obj: Object) {
+    const keys = Object.keys(obj)
+    for (let i = 0; i < keys.length; i++) { 
+      defineReactive(obj, keys[i]) // 添加响应式处理
+    }
+  }
+
+  // 遍历数组添加监听（data里边的数组数据）
+  observeArray(items: Array<any>) {
+    for (let i = 0, l = items.length; i < l; i++) {
+      observe(items[i])
+    }
+  }
+}
+```
+
+`defineReactive`定义对象属性的`getter`/`setter`，`getter`负责添加依赖，`setter`负责通知更新.
+```js
+// 定义响应式
+function defineReactive {
+  // 为每一个属性也添加依赖收集
+  const dep = new Dep()
+
+  // 获取对象描述符（用于判断是否可以配置）
+  const property = Object.getOwnPropertyDescriptor(obj, key) // 获取键的属性描述符
+  if (property && property.configurable === false) { // 如果是不可配置的属性，直接返回
+    return
+  }
+
+  // cater for pre-defined getter/setters
+  const getter = property && property.get // 获取键的getter
+  const setter = property && property.set // 获取键的setter
+
+  if ((!getter || setter) && arguments.length === 2) { // 如果键没有设置getter或者setter而且传入的参数只有两个（会设置其他非用户传进来的参数（$attrs,$listeners等））
+    val = obj[key] // 就直接保存这个键对应的值，进行下面的操作
+  }
+
+  // 判断是否观察子对象
+  let childOb = !shallow && observe(val) // 判断是否具有子对象（返回undefined或者observer） 例如 data:{name:{lastName:'lau',firstName:'leo'}} // 给子对象也添加observer
+  
+  // 拦截获取
+  Object.defineProperty(obj, key, { // 设置getter和setter
+    enumerable: true,
+    configurable: true,
+    // 获取
+    get: function reactiveGetter () { // 设置响应化获取
+      const value = getter ? getter.call(obj) : val // 如果有配置getter，就绑定到data中，否则就直接输出结果
+      if (Dep.target) { // watch实例
+        dep.depend() // 给watcher添加dep
+        if (childOb) {
+          childOb.dep.depend()
+          if (Array.isArray(value)) {
+            dependArray(value)
+          }
+        }
+      }
+      return value
+    },
+  
+    // 拦截
+    set: function reactiveSetter (newVal) {
+      // 获取之前的值 且不为 NaN
+      const value = getter ? getter.call(obj) : val
+
+      // .. 判断新值
+
+      if (getter && !setter) return
+      if (setter) {
+        setter.call(obj, newVal)
+      } else {
+        val = newVal
+      }
+      // 如果存在子对象，且非浅监听，直接观察
+      childOb = !shallow && observe(newVal)
+
+      // 触发更新
+      dep.notify()
+    }
+  })
+}
+```
+
+core/observer/dep.js
+`Dep`负责管理一组`Watcher`，包括`watcher`实例的增删及通知更新。
+```js
+class Dep { // 依赖，管理watcher
+  static target: ?Watcher;  // target就是watcher实例
+  id: number;
+  subs: Array<Watcher>;
+
+  constructor () {
+    this.id = uid++
+    this.subs = []
+  }
+  addSub (sub: Watcher) { // 添加订阅者，有多个访问了data中的某个属性
+    this.subs.push(sub)
+  }
+
+  removeSub (sub: Watcher) { // 删除订阅者
+    remove(this.subs, sub)
+  }
+
+  depend () { // watcher中添加dep实例
+    if (Dep.target) {
+      Dep.target.addDep(this)
+    }
+  }
+
+  notify () {
+
+    // stabilize the subscriber list
+    // ..
+
+    for (let i = 0, l = subs.length; i < l; i++) {
+      subs[i].update() // 通知更新
+    }
+  }
+}
+```
+
+**`Watcher`**
+
+`Watcher`解析一个表达式并收集依赖，当数值变化时触发回调函数，常用于`$watch` API和指令中。
+每个组件也会有对应的`Watcher`，数值变化会触发其`update`函数导致重新渲染。
+
+```js
+class Watcher {
+  constructor () {}
+  // 重新收集依赖
+  get () {
+    pushTarget(this) // 将Dep.target设置成当前的watcher实例，将当前的watcher添加进watcher队列中
+  }
+  // 给当前组件的watcher添加依赖
+  addDep (dep: Dep) {
+    // ..
+    
+    // 添加watcher实例
+    dep.addSub(this)
+  }
+  // 清除数据
+  cleanupDeps () {}
+
+  // 更新 懒更新和同步
+  update () { // 通知更新
+    
+    // ..
+    // 同步执行更新渲染
+    this.run()
+
+    // 异步就添加到watcher队列之后统一更新
+  }
+
+  // 执行更新
+  run() {}
+```
+
+以上就是一些数据响应式相关的源码，在使用Vue时，数组是特别注意的。
+
+**数组响应化**
+数组数据变化的侦测跟对象不同，我们操作数组通常使用`push`、`pop`、`splice`等方法，此时没有办法得知数据变化。所以vue中采取的策略是拦截这些方法并通知`dep`。
+
+```js
+function observe(obj) {
+  Object.definedPro
+}
+```
+
+
+
 
 ## 3. 模板语法
 Vue.js 使用了基于 HTML 的模板语法，允许开发者声明式地将 DOM 绑定至底层 Vue 实例的数据。所有 Vue.js 的模板都是合法的 HTML，所以能被遵循规范的浏览器和 HTML 解析器解析。
