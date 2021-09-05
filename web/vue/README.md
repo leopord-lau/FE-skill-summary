@@ -563,6 +563,7 @@ class Watcher {
     // 同步执行更新渲染
     this.run()
 
+    // ..
     // 异步就添加到watcher队列之后统一更新
   }
 
@@ -575,11 +576,183 @@ class Watcher {
 **数组响应化**
 数组数据变化的侦测跟对象不同，我们操作数组通常使用`push`、`pop`、`splice`等方法，此时没有办法得知数据变化。所以vue中采取的策略是拦截这些方法并通知`dep`。
 
+可以用之前的`observe`方法来验证一下数组的变化其实是不会触发更新。
+
+让我们来看看vue中是如何处理数组的。
+
+src/core/observer/array.js
+为数组原型中的7个可以改变内容的方法定义拦截器。
 ```js
-function observe(obj) {
-  Object.definedPro
+const methodsToPatch = [ // 定义拦截器
+  'push',
+  'pop',
+  'shift',
+  'unshift',
+  'splice',
+  'sort',
+  'reverse' 
+];
+
+// 重写以上方法并添加相应的处理
+methodsToPatch.forEach(function (method) {
+  // 获取原始方法
+  const original = arrayProto[method]
+  def(arrayMethods, method, function mutator (...args) {
+    const result = original.apply(this, args)
+    const ob = this.__ob__
+    let inserted
+    switch (method) {
+      case 'push': 
+      case 'unshift':
+        inserted = args
+        break
+      case 'splice':
+        inserted = args.slice(2)
+        break
+    }
+    if (inserted) ob.observeArray(inserted)
+    // notify change
+    ob.dep.notify()
+    return result
+  })
+})
+```
+
+src/core/observer/index.js
+在`Observer`类中覆盖数组原型
+```js
+if (Array.isArray(value)) { // data中可能具有object或者array类型的数据，需要进行不同的处理方式
+  protoAugment(value, arrayMethods)
+  // 循环遍历所有的value进行observe操作
+  this.observeArray(value)
+}
+
+// 改变目标的_proto__指向，使其指向添加了拦截器的Array原型对象上
+function protoAugment (target, src) {
+  target.__proto__ = src
+}
+
+// 观察数组
+function observeArray(items: Array<any>) {
+  for (let i = 0, l = items.length; i < l; i++) {
+    observe(items[i])
+  }
 }
 ```
+
+**异步更新队列**
+
+src/core/observer/watcher.js
+`dep.notify()`之后`watcher`执行更新，执行入队操作。
+```js
+update () { // 通知更新
+  if (this.lazy) {
+    this.dirty = true
+  } else if (this.sync) {
+    // 直接更新
+    this.run()
+  } else {
+    // 进入队列后统一更新
+    queueWatcher(this)
+  }
+}
+```
+
+src/cores/observer/scheduler.js
+`queueWatcher()`执行watcher入队操作。
+```js
+function queueWatcher (watcher) { // watcher进队
+  // .. 
+  // watcher 去重
+  queue.push(watcher); // 如果没有在刷新就将watcher放入队列
+
+  // ..
+
+  // 刷新队列
+  flushSchedulerQueue()
+
+  nextTick(flushSchedulerQueue) // 启动nextTick
+}
+```
+
+`flushSchedulerQueue()`刷新队列。
+```js
+function flushSchedulerQueue () {
+  // ..
+
+  // 给队列排序，保证了组件更新是从父组件到子组件
+  queue.sort((a, b) => a.id - b.id);
+
+  // ..
+  // 遍历执行更新
+
+  // ..
+  // 调用钩子
+  callActivatedHooks(activatedQueue)
+  callUpdatedHooks(updatedQueue)
+}
+```
+
+src/core/util/next-tick.js
+`nextTick()`按照特定异步策略执行队列操作。
+```js
+function nextTick (cb?: Function, ctx?: Object) {
+  let _resolve
+  callbacks.push(() => {
+    if (cb) {
+      try {
+        cb.call(ctx)
+      } catch (e) {
+        handleError(e, ctx, 'nextTick')
+      }
+    } else if (_resolve) {
+      _resolve(ctx)
+    }
+  })
+  if (!pending) {
+    pending = true
+    timerFunc()  // 异步的启动工作
+  }
+}
+
+```
+
+
+**原型链扩展**
+
+上方设计到原型链的一些知识，简单介绍一下原型链，如果已经熟悉原型链，可以跳过。
+
+1. 原型   
+
+原型对象：在声明了一个函数之后，浏览器会自动按照一定的规则创建一个对象，这个对象就叫做原型对象。这个原型对象其实是储存在了内存当中。
+
+在js中，每个构造函数内部都有一个`prototype`属性，该属性的值是个对象（原型对象），该对象包含了该构造函数所有实例共享的属性和方法。当我们通过构造函数创建对象的时候，在这个对象中有一个指针(`__proto__`)，这个指针指向构造函数的`prototype`的值，我们将这个指向`prototype`的指针称为原型。或者用另一种简单却难理解的说法是：js中的对象都有一个特殊的\[[Prototype]]内置属性，其实这就是原型。
+
+拿`Object`来举一个例子：
+
+`Object.prototype`指向图
+
+![prototype指向图](./images/prototype指向图.png)
+
+`Object.prototype`对象
+![Object.prototype对象](./images/Object.prototype对象图.png)
+
+使用`Object`构造函数来创建一个对象：
+```js
+var obj = new Object();
+```
+`obj`就是构造函数`Object`创造出的对象，它不存在`prototype`属性，但是`obj`却有一个`__proto__`属性，这个属性指向了构造函数`Object`的原型对象（也就是说，`obj.__proto__ === Object.prototype`）。每个原型对象都有`constructor`属性，指向了它的构造函数（也就是说，`Object.prototype.constructor === Object`）
+![__proto__指向图](./images/__proto__指向图.png)
+
+总结：
+- 所有引用类型都有一个`__proto__`(隐式原型)属性，属性值是一个普通的对象
+- 所有的函数，都有一个 `prototype`(显式原型)属性，属性值也是一个普通的对象
+- 所有的引用类型（数组、对象、函数),`__proto__`(隐式原型)属性值指向它的构造函数的`prototype`属性值。
+
+
+2. 原型链
+当访问一个对象的某个属性时，会先在这个对象本身属性上查找，如果没有找到，则会去它的`__proto__`隐式原型上查找，即它的构造函数的`prototype`，如果还没有找到就会再在构造函数的`prototype`的`__proto__`中查找，这样一层一层向上查找就会形成一个链式结构，我们称为原型链。
+
 
 
 
