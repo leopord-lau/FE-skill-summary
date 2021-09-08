@@ -110,7 +110,7 @@ module.exports = {
   },
 };
 ```
-contenthash默认长度是20，可以通过`[contenthash:8]`来指定长度。
+`contenthash`默认长度是20，可以通过`[contenthash:8]`来指定长度。
 
 
 ### 3. loader
@@ -238,3 +238,90 @@ module.exports = {
   // ..
 };
 ```
+
+## 配置HTML模板
+
+在前面的基础知识中，我们简单介绍了`webpack`的一些配置，虽然`js`文件打包好了，但是我们不可能每次在`html`文件中手动引入打包好的`js`（使用占位符生成文件名导致生成的`js`名称变动）。
+
+`html-webpack-plugin`这个插件可以将打包生成的`js`文件引入`html`中。
+```js
+const path = require("path");
+const HtmlWebpackPlugin = require("html-webpack-plugin");
+module.exports = {
+  mode: "development",
+  entry: path.resolve(__dirname, "./src/main.js"),
+  output: {
+    filename: "[name].[hash:8].js",
+    path: path.resolve(__dirname, "./dist"),
+  },
+  plugins: [
+    // new HtmlWebpackPlugin({
+    //   template: path.resolve(__dirname, "./public/index.html"),
+    // }),
+    
+    // 自动生成html
+    new HtmlWebpackPlugin({
+      title: "自动生成"
+    }),
+  ],
+};
+```
+配置后，生成的`html`会自动引入打包后的文件。如果没有模板`html`，在使用了`html-webpack-plugin`后会自动生成一个引入了打包文件的`html`文件。
+
+### 多入口文件
+```js
+const path = require("path");
+const HtmlWebpackPlugin = require("html-webpack-plugin");
+module.exports = {
+  mode: "development",
+  entry: {
+    main: path.resolve(__dirname, "./src/main.js"),
+    index: path.resolve(__dirname, "./src/index.js"),
+  },
+  output: {
+    filename: "[name].[hash].js",
+    path: path.resolve(__dirname, "./dist"),
+    clean: true,
+  },
+  plugins: [
+    new HtmlWebpackPlugin({
+      title: "main",
+      filename: "main.html",
+      chunks: ["main"],
+    }),
+    new HtmlWebpackPlugin({
+      title: "index",
+      filename: "index.html",
+      chunks: ["index"], // 与入口文件对应的模块名
+    }),
+  ],
+};
+```
+
+## 引用css
+在基础知识`loader`中我们介绍了`webpack`只能解析`js`和`json`文件，现在我们来看一个css文件如何处理。
+
+引入一些`loader`:
+```bash
+npm i --save-dev style-loader css-loader
+```
+如果我们使用`less`来构建样式，则需要多安装两个
+```bash
+npm i -D less less-loader
+```
+
+```js
+module.exports = {
+  // ..
+  module: {
+    rules: [
+      {
+        test: /\.css$/,
+        use: ["style-loader", "css-loader"],
+      },
+    ],
+  },
+};
+```
+
+这时候我们发现`css`通过`style`标签的方式添加到了`html`文件中，但是如果样式文件很多，全部添加到`html`中，难免显得混乱。这时候我们想用把`css`拆分出来用外链的形式引入`css`文件怎么做呢？这时候我们就需要借助插件来帮助我们
