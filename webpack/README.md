@@ -119,6 +119,7 @@ contenthash默认长度是20，可以通过`[contenthash:8]`来指定长度。
 - `test` 属性，识别出哪些文件会被转换。
 - `use` 属性，定义出在进行转换时，应该使用哪个 `loader`。
 
+
 比如说要处理一个`txt`文件。
 ```js
 const path = require("path");
@@ -139,10 +140,75 @@ module.exports = {
 ```
 > 请记住，使用正则表达式匹配文件时，你不要为它添加引号。也就是说，`/\.txt$/` 与 `'/\.txt$/'` 或 `"/\.txt$/"` 不一样。前者指示 `webpack` 匹配任何以 `.txt` 结尾的文件，后者指示 `webpack` 匹配具有绝对路径 `'.txt'` 的单个文件; 这可能不符合你的意图。
 
+#### 使用loader
+
+在`webpack`中有两种使用`loader`的方式：
+- 配置方式： 在`webpack.config.js`文件中指定`loader`.
+- 内联方式：在每个`import`语句中显式指定`loader`
+
+1. 配置方式
+在`module.rules` 中进行配置指定多个 `loader`.
+`loader` 从右到左（或从下到上）地取值(`evaluate`)/执行(`execute`)。
+```js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.css$/,
+        // 从右至左
+        // use: ["style-loader", "css-loader"],
+
+        // 从下到上
+        use: [
+          { loader: "style-loader" },
+          {
+            loader: "css-loader",
+            options: {
+              modules: true,
+            },
+          },
+        ],
+      },
+    ],
+  },
+};
+```
+
+2. 内联方式
+
+可以在 `import` 语句或任何 与 "`import`" 方法同等的引用方式 中指定 `loader`。使用 ! 将资源中的 `loader` 分开。每个部分都会相对于当前目录解析。
+```js
+import Styles from 'style-loader!css-loader?modules!./styles.css';
+```
+
+通过为内联 `import` 语句添加前缀，可以覆盖 配置 中的所有 `loader`, `preLoader` 和 `postLoader`：
+
+使用 `!` 前缀，将禁用所有已配置的 `normal loader`(普通 `loader`)
+```js
+import Styles from '!style-loader!css-loader?modules!./styles.css';
+```
+使用 `!!` 前缀，将禁用所有已配置的 `loader`（`preLoader`, `loader`, `postLoader`）
+```js
+import Styles from '!!style-loader!css-loader?modules!./styles.css';
+```
+使用 `-!` 前缀，将禁用所有已配置的 `preLoader` 和 `loader`，但是不禁用 `postLoaders`
+```js
+import Styles from '-!style-loader!css-loader?modules!./styles.css';
+```
+
+// TODO preloader 、 loader 、 postloader
+
+
+
+
 ### 4.`plugin`
 `loader` 用于转换某些类型的模块，而插件则可以用于执行范围更广的任务。包括：打包优化，资源管理，注入环境变量。
 
-使用一个插件，只需要在配置文件中通过 `require()`引入，然后把它添加到 `plugins` 数组中。多数插件可以通过选项(`option`)自定义。你也可以在一个配置文件中因为不同目的而多次使用同一个插件，这时需要通过使用 `new` 操作符来创建一个插件实例。
+`webpack` 插件是一个具有 `apply` 方法的 `JavaScript` 对象。`apply` 方法会被 `webpack compiler` 调用，并且在 整个 编译生命周期都可以访问 `compiler` 对象。
+
+使用一个插件，只需要在配置文件中通过 `require()`引入。由于插件可以携带参数/选项，你必须在 `webpack` 配置中，向 `plugins` 属性传入一个 `new` 实例。
+
+取决于你的 `webpack` 用法，对应有多种使用插件的方式。
 
 安装`html-webapck-plugin`
 
@@ -160,6 +226,8 @@ module.exports = {
 ```
 
 `html-webpack-plugin` 为应用程序生成一个 `HTML` 文件，并自动将生成的所有 `bundle` 注入到此文件中。
+
+
 
 ### 6. mode
 通过选择 `development`, `production` 或 `none` 之中的一个，来设置 `mode` 参数，你可以启用 `webpack` 内置在相应环境下的优化。其默认值为 `production`。
