@@ -324,4 +324,43 @@ module.exports = {
 };
 ```
 
-这时候我们发现`css`通过`style`标签的方式添加到了`html`文件中，但是如果样式文件很多，全部添加到`html`中，难免显得混乱。这时候我们想用把`css`拆分出来用外链的形式引入`css`文件怎么做呢？这时候我们就需要借助插件来帮助我们
+![css引用](./images/css引用.png)
+
+这时候我们发现`css`通过`style`标签的方式添加到了`html`文件中，但是如果样式文件很多，全部添加到`html`中，难免显得混乱。这时候我们想用把`css`拆分出来用外链的形式引入`css`文件怎么做呢？这时候我们就需要借助插件来帮助我们。
+
+### 拆分`css`
+使用`mini-css-extract-plugin`插件。
+```bash
+npm i -D mini-css-extract-plugin
+```
+
+```js
+module.exports = {
+  // ..
+  module: {
+    rules: [
+      {
+        test: /\.css$/,
+        use: [MiniCssExtractPlugin.loader, "css-loader"],
+      },
+    ],
+  },
+  plugins: [
+    new MiniCssExtractPlugin({
+      filename: "[name].[hash].css",
+      chunkFilename: "[id].css",
+    })
+  ],
+};
+```
+
+![css引用](./images/拆分css.png)
+`mini-css-extract-plugin`会将所有的`css`样式合并为一个`css`文件，也就是说不管你有多少个`css`文件，最终都只会打包生成一个`css`文件，通过`link`标签引入。
+
+### 拆分多个`css`
+如果想拆分成多个`css`文件，则需要使用另外一个插件,@next版本的`extract-text-webpack-plugin`. 只支持`webpack^3.x`和`webpack^4.x`。
+
+```bash
+npm i -D extract-text-webpack-plugin
+```
+
