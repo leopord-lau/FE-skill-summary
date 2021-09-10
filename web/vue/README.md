@@ -341,21 +341,359 @@ const leo = new Leo({
 leo.test = 'change'
 ```
 
+经过上面的代码，你应该对Vue的响应式有一定的理解了，现在我们将开始讲解Vue的响应式源码。
+
+#### 数据响应式源码
+Vue一大特点是数据响应式，数据的变化会作用于UI而不用进行DOM操作。原理上来讲，是利用了JS语言特性`Object.defineProperty()`，通过定义对象属性`setter`方法拦截对象属性变更，从而将数值的变化转换为UI的变化。
+
+具体实现是在Vue初始化时，会调用`initState`，它会初始化`data`，`props`等，这里着重关注`data`初始化.
+
+初始化数据源码目录：`src/core/instance/state.js`
+
+核心代码便是`initData`:
+```js
+function initData (vm: Component) { // 初始化数据
+  let data = vm.$options.data // 获取data
+  data = vm._data = typeof data === 'function' // data(){return {}} 这种情况跟 data:{} 这种
+    ? getData(data, vm)
+    : data || {}
+  
+  // ..
+  
+  // proxy data on instance // 将data代理到实例上
+  proxy(vm, `_data`, key) // 代理，通过this.dataName就可以直接访问定义的数据，而不用通过this.$data.dataName
+  // observe data
+  
+  // ..
+
+  observe(data, true /* asRootData */) // 执行数据的响应化
+}
+```
+
+core/observer/index.js
+observe方法返回一个`Observer`实例
+```js
+function observe (value: any, asRootData: ?boolean): Observer | void {  // 返回一个Observer实例,一个data对应这一个__ob__(有value，dep这两者个数相同)
+
+  // ..
+
+  ob = new Observer(value) // 新建一个Observer实例，通过将这个实例添加在value的__ob__属性中
+
+  // ..
+
+  return ob
+}
+```
+
+core/observer/index.js
+Observer对象根据数据类型执行对应的响应化操作
+
+```js
+class Observer {
+  value: any;
+  dep: Dep;
+  vmCount: number; // number of vms that have this object as root $data
+
+  constructor (value: any) {
+    this.value = value // data本身
+    // 最开始是data调用了一次
+    this.dep = new Dep() // dependence 依赖收集，data中的每一个键都对应着一个dep
+
+    // ..
+
+    def(value, '__ob__', this) // 定义一个property 设置_ob__,它的值就是Observer实例
+    if (Array.isArray(value)) { // data中可能具有object或者array类型的数据，需要进行不同的处理方式
+      
+      // ..
+
+      // 循环遍历所有的value进行observe操作
+      this.observeArray(value)
+    } else {
+      this.walk(value) // 如果不是array类型，就直接进行操作
+    }
+  }
+
+  // 处理对象类型数据
+  walk (obj: Object) {
+    const keys = Object.keys(obj)
+    for (let i = 0; i < keys.length; i++) { 
+      defineReactive(obj, keys[i]) // 添加响应式处理
+    }
+  }
+
+  // 遍历数组添加监听（data里边的数组数据）
+  observeArray(items: Array<any>) {
+    for (let i = 0, l = items.length; i < l; i++) {
+      observe(items[i])
+    }
+  }
+}
+```
+
+`defineReactive`定义对象属性的`getter`/`setter`，`getter`负责添加依赖，`setter`负责通知更新.
+```js
+// 定义响应式
+function defineReactive {
+  // 为每一个属性也添加依赖收集
+  const dep = new Dep()
+
+  // 获取对象描述符（用于判断是否可以配置）
+  const property = Object.getOwnPropertyDescriptor(obj, key) // 获取键的属性描述符
+  if (property && property.configurable === false) { // 如果是不可配置的属性，直接返回
+    return
+  }
+
+  // cater for pre-defined getter/setters
+  const getter = property && property.get // 获取键的getter
+  const setter = property && property.set // 获取键的setter
+
+  if ((!getter || setter) && arguments.length === 2) { // 如果键没有设置getter或者setter而且传入的参数只有两个（会设置其他非用户传进来的参数（$attrs,$listeners等））
+    val = obj[key] // 就直接保存这个键对应的值，进行下面的操作
+  }
+
+  // 判断是否观察子对象
+  let childOb = !shallow && observe(val) // 判断是否具有子对象（返回undefined或者observer） 例如 data:{name:{lastName:'lau',firstName:'leo'}} // 给子对象也添加observer
+  
+  // 拦截获取
+  Object.defineProperty(obj, key, { // 设置getter和setter
+    enumerable: true,
+    configurable: true,
+    // 获取
+    get: function reactiveGetter () { // 设置响应化获取
+      const value = getter ? getter.call(obj) : val // 如果有配置getter，就绑定到data中，否则就直接输出结果
+      if (Dep.target) { // watch实例
+        dep.depend() // 给watcher添加dep
+        if (childOb) {
+          childOb.dep.depend()
+          if (Array.isArray(value)) {
+            dependArray(value)
+          }
+        }
+      }
+      return value
+    },
+  
+    // 拦截
+    set: function reactiveSetter (newVal) {
+      // 获取之前的值 且不为 NaN
+      const value = getter ? getter.call(obj) : val
+
+      // .. 判断新值
+
+      if (getter && !setter) return
+      if (setter) {
+        setter.call(obj, newVal)
+      } else {
+        val = newVal
+      }
+      // 如果存在子对象，且非浅监听，直接观察
+      childOb = !shallow && observe(newVal)
+
+      // 触发更新
+      dep.notify()
+    }
+  })
+}
+```
+
+core/observer/dep.js
+`Dep`负责管理一组`Watcher`，包括`watcher`实例的增删及通知更新。
+```js
+class Dep { // 依赖，管理watcher
+  static target: ?Watcher;  // target就是watcher实例
+  id: number;
+  subs: Array<Watcher>;
+
+  constructor () {
+    this.id = uid++
+    this.subs = []
+  }
+  addSub (sub: Watcher) { // 添加订阅者，有多个访问了data中的某个属性
+    this.subs.push(sub)
+  }
+
+  removeSub (sub: Watcher) { // 删除订阅者
+    remove(this.subs, sub)
+  }
+
+  depend () { // watcher中添加dep实例
+    if (Dep.target) {
+      Dep.target.addDep(this)
+    }
+  }
+
+  notify () {
+
+    // stabilize the subscriber list
+    // ..
+
+    for (let i = 0, l = subs.length; i < l; i++) {
+      subs[i].update() // 通知更新
+    }
+  }
+}
+```
+
+**`Watcher`**
+
+`Watcher`解析一个表达式并收集依赖，当数值变化时触发回调函数，常用于`$watch` API和指令中。
+每个组件也会有对应的`Watcher`，数值变化会触发其`update`函数导致重新渲染。
+
+```js
+class Watcher {
+  constructor () {}
+  // 重新收集依赖
+  get () {
+    pushTarget(this) // 将Dep.target设置成当前的watcher实例，将当前的watcher添加进watcher队列中
+  }
+  // 给当前组件的watcher添加依赖
+  addDep (dep: Dep) {
+    // ..
+    
+    // 添加watcher实例
+    dep.addSub(this)
+  }
+  // 清除数据
+  cleanupDeps () {}
+
+  // 更新 懒更新和同步
+  update () { // 通知更新
+    
+    // ..
+    // 同步执行更新渲染
+    this.run()
+
+    // ..
+    // 异步就添加到watcher队列之后统一更新
+  }
+
+  // 执行更新
+  run() {}
+```
+
+以上就是一些数据响应式相关的源码，在使用Vue时，数组是特别注意的。
+
+**数组响应化**
+数组数据变化的侦测跟对象不同，我们操作数组通常使用`push`、`pop`、`splice`等方法，此时没有办法得知数据变化。所以vue中采取的策略是拦截这些方法并通知`dep`。
+
+可以用之前的`observe`方法来验证一下数组的变化其实是不会触发更新。
+
+让我们来看看vue中是如何处理数组的。
+
+src/core/observer/array.js
+为数组原型中的7个可以改变内容的方法定义拦截器。
+```js
+const methodsToPatch = [ // 定义拦截器
+  'push',
+  'pop',
+  'shift',
+  'unshift',
+  'splice',
+  'sort',
+  'reverse' 
+];
+
+// 重写以上方法并添加相应的处理
+methodsToPatch.forEach(function (method) {
+  // 获取原始方法
+  const original = arrayProto[method]
+  def(arrayMethods, method, function mutator (...args) {
+    const result = original.apply(this, args)
+    const ob = this.__ob__
+    let inserted
+    switch (method) {
+      case 'push': 
+      case 'unshift':
+        inserted = args
+        break
+      case 'splice':
+        inserted = args.slice(2)
+        break
+    }
+    if (inserted) ob.observeArray(inserted)
+    // notify change
+    ob.dep.notify()
+    return result
+  })
+})
+```
+
+src/core/observer/index.js
+在`Observer`类中覆盖数组原型
+```js
+if (Array.isArray(value)) { // data中可能具有object或者array类型的数据，需要进行不同的处理方式
+  protoAugment(value, arrayMethods)
+  // 循环遍历所有的value进行observe操作
+  this.observeArray(value)
+}
+
+// 改变目标的_proto__指向，使其指向添加了拦截器的Array原型对象上
+function protoAugment (target, src) {
+  target.__proto__ = src
+}
+
+// 观察数组
+function observeArray(items: Array<any>) {
+  for (let i = 0, l = items.length; i < l; i++) {
+    observe(items[i])
+  }
+}
+```
+
+
+**原型链扩展**
+
+上方设计到原型链的一些知识，简单介绍一下原型链，如果已经熟悉原型链，可以跳过。
+
+1. 原型   
+
+原型对象：在声明了一个函数之后，浏览器会自动按照一定的规则创建一个对象，这个对象就叫做原型对象。这个原型对象其实是储存在了内存当中。
+
+在js中，每个构造函数内部都有一个`prototype`属性，该属性的值是个对象（原型对象），该对象包含了该构造函数所有实例共享的属性和方法。当我们通过构造函数创建对象的时候，在这个对象中有一个指针(`__proto__`)，这个指针指向构造函数的`prototype`的值，我们将这个指向`prototype`的指针称为原型。或者用另一种简单却难理解的说法是：js中的对象都有一个特殊的\[[Prototype]]内置属性，其实这就是原型。
+
+拿`Object`来举一个例子：
+
+`Object.prototype`指向图
+
+![prototype指向图](./images/prototype指向图.png)
+
+`Object.prototype`对象
+![Object.prototype对象](./images/Object.prototype对象图.png)
+
+使用`Object`构造函数来创建一个对象：
+```js
+var obj = new Object();
+```
+`obj`就是构造函数`Object`创造出的对象，它不存在`prototype`属性，但是`obj`却有一个`__proto__`属性，这个属性指向了构造函数`Object`的原型对象（也就是说，`obj.__proto__ === Object.prototype`）。每个原型对象都有`constructor`属性，指向了它的构造函数（也就是说，`Object.prototype.constructor === Object`）
+![__proto__指向图](./images/__proto__指向图.png)
+
+总结：
+- 所有引用类型都有一个`__proto__`(隐式原型)属性，属性值是一个普通的对象
+- 所有的函数，都有一个 `prototype`(显式原型)属性，属性值也是一个普通的对象
+- 所有的引用类型（数组、对象、函数),`__proto__`(隐式原型)属性值指向它的构造函数的`prototype`属性值。
+
+
+2. 原型链
+当访问一个对象的某个属性时，会先在这个对象本身属性上查找，如果没有找到，则会去它的`__proto__`隐式原型上查找，即它的构造函数的`prototype`，如果还没有找到就会再在构造函数的`prototype`的`__proto__`中查找，这样一层一层向上查找就会形成一个链式结构，我们称为原型链。
+
+
 
 ## 3. 模板语法
 Vue.js 使用了基于 HTML 的模板语法，允许开发者声明式地将 DOM 绑定至底层 Vue 实例的数据。所有 Vue.js 的模板都是合法的 HTML，所以能被遵循规范的浏览器和 HTML 解析器解析。
 
 ### 文本
-数据绑定最常见的形式就是使用“Mustache”语法 (双大括号) 的文本插值：
+数据绑定最常见的形式就是使用“`Mustache`”语法 (双大括号) 的文本插值：
 ```html
 <span>Message: {{ msg }}</span>
 ```
-Mustache 标签将会被替代为对应数据对象上 msg property 的值。无论何时，绑定的数据对象上 msg property 发生了改变，插值处的内容都会更新。
+`Mustache` 标签将会被替代为对应数据对象上 `msg` 的值。无论何时，绑定的数据对象上 `msg` 发生了改变，插值处的内容都会更新。
 
 通过使用 `v-once` 指令，你也能执行一次性地插值，当数据改变时，插值处的内容不会更新。但请留心这会影响到该节点上的其它数据绑定：
 ```html
 <span v-once>这个将不会改变: {{ msg }}</span>
 ```
+
+
 
 ### 原始HTML
 双大括号会将数据解释为普通文本，而非 HTML 代码。为了输出真正的 HTML，你需要使用 `v-html` 指令：
@@ -366,7 +704,7 @@ Mustache 标签将会被替代为对应数据对象上 msg property 的值。无
 
 
 ### attribute
-Mustache 语法不能作用在 HTML attribute 上，遇到这种情况应该使用 `v-bind` 指令
+`Mustache` 语法不能作用在 `HTML` attribute 上，遇到这种情况应该使用 `v-bind` 指令
 ```html
 <div v-bind:id="dynamicId"></div>
 ```
@@ -1109,3 +1447,559 @@ export default {
 }
 </script>
 ```
+
+
+
+## 模板编译
+上面我们介绍了很多有关模板渲染的使用，下面我们来了解一下vue内部的模板编译源码。
+
+模板编译的主要目标是将模板(`template`)转换为渲染函数(`render`)。
+![模板编译](./images/模板编译.png)
+
+必要性：`Vue 2.0`需要用到`VNode`描述视图以及各种交互，手写显然不切实际，因此用户只需编写类似`HTML`代码
+的`Vue`模板，通过编译器将模板转换为可返回`VNode`的`render`函数。
+
+
+### 整体流程
+src/platforms/web/entry-runtime-with-compiler.js       
+扩展了`$mount`方法
+```js
+const mount = Vue.prototype.$mount // 获取Vue原型中的 $mount 方法
+Vue.prototype.$mount = function (el, hydrating) {
+  el = el && query(el) // 查找对应的dom，没有就自己创建一个div
+  // ..
+
+  const options = this.$options // 获取Vue实例中的参数
+  // render函数
+  if(!options.render) {
+    // ..
+    if(options.template) {
+      // 根据模板找到元素
+      template = idToTemplate(this.$options.template);
+      
+      // ..
+    } else if(el) {
+      // 或者根据el找到元素
+      template = getOuterHTML(el);
+    }
+    // ..
+    // 编译模板
+    const { render, staticRenderFns } = compileToFunctions(template, {}, this);
+  }
+  // 将扩展方法添加上去
+  return mount.call(this, el, hydrating);
+}
+```
+
+可以从源码上看出，`render`函数最先解析，其次是`template`，最后才是`el`。
+
+
+
+#### 编译过程
+src/compiler/index.js
+```js
+const createCompiler = createCompilerCreator(function baseCompile( // 创建一个编译器
+  template: string,
+  options: CompilerOptions
+): CompiledResult {
+  // AST 就是js对象，类型VNODE
+  const ast = parse(template.trim(), options) // 将模板编译成ast形式
+  if (options.optimize !== false) {
+    optimize(ast, options) // 将ast进行优化 添加static，staticRoot，用于判断是否是静态(不含data或指令)的，即要不要更新
+  }
+  // 生成，AST转换成代码字符串'function(){}'
+  const code = generate(ast, options) // 生成render函数
+  return {
+    ast,
+    render: code.render,
+    staticRenderFns: code.staticRenderFns
+  }
+})
+```
+
+
+### 模板编译过程
+实现模板编译共有三个阶段：解析、优化和生成。
+
+**解析 - `parse`**
+解析器将模板解析为抽象语法树`AST`，只有将模板解析成`AST`后，才能基于它做优化或者生成代码字符串。
+
+src/compiler/parser/index.js
+解析后的AST如下图所示：
+![AST demo](./images/ast-demo.png)
+
+解析器内部有HTML解析器、文本解析器和过滤器解析器。最主要是HTML解析器。
+
+**HTML解析器**
+```js
+parseHTML(tempalte, {
+  start(tag, attrs, unary){
+    // 处理v-pre指令
+    processPre();
+    // 处理标签上的属性
+    processRawAttrs();
+    // 处理v-for指令
+    processFor();
+    // 处理v-if指令
+    processIf();
+    // 处理v-once指令
+    processOnce();
+  }, // 遇到开始标签的处理 
+  end(){},// 遇到结束标签的处理 
+  chars(text){},// 遇到文本标签的处理 
+  comment(text){}// 遇到注释标签的处理 
+})
+```
+
+
+**优化 - optimize**
+优化器的作用是在AST中找出静态子树并打上标记。静态子树是在`AST`中永远不变的节点，如纯文本节点。
+
+标记静态子树的好处：
+- 每次重新渲染，不需要为静态子树创建新节点
+- 虚拟DOM中patch时，可以跳过静态子树
+
+src/compiler/optimizer.js
+```js
+function optimize(root, options) {
+  // 标记所有非静态节点
+  markStatic(root)
+  
+  // 标记所有静态节点
+  markStaticRoots(root, false)
+}
+```
+
+
+**代码生成 - generate**
+将AST转换成渲染函数中的内容，即代码字符串。
+src/compiler/codegen/index.js
+```js
+function generate(ast, options) {
+  const state = new CodegenState(options)
+  const code = ast ? genElement(ast, state) : '_c("div")'
+  return {
+    render: `with(this){return ${code}}`,
+    staticRenderFns: state.staticRenderFns
+  }
+}
+```
+
+
+
+
+## 8、事件处理
+
+### 事件监听
+
+`v-on`指令监听DOM事件，可以用`@`简写，可以使用以下几个方式：
+
+
+
+1. 直接运行js代码
+```html
+<div @click="a +='a'">
+  add a {{a}}
+</div>
+<script>
+export default {
+  data() {
+    return {
+      a: "a"
+    }
+  }
+}
+</script>
+```
+
+2. 传入方法名，绑定一个方法
+```html
+<div @click="addA">
+  add a {{a}}
+</div>
+<script>
+export default {
+  data() {
+    return {
+      a: "a"
+    }
+  },
+  methods: {
+    addA() {
+      this.a += 'a'
+    }
+  }
+}
+</script>
+```
+
+3. 内联js语句调用方法
+```html
+<div @click="addVal('a')">
+  add a {{a}}
+</div>
+<script>
+export default {
+  data() {
+    return {
+      a: "a"
+    }
+  },
+  methods: {
+    addA(val) {
+      this.a += val;
+    }
+  }
+}
+</script>
+```
+
+4. 访问原始DOM事件
+
+用特殊变量`$event`将其传入方法中。
+
+```html
+<div @click="addVal('a', $event)">
+  add a {{a}}
+</div>
+<script>
+export default {
+  data() {
+    return {
+      a: "a"
+    }
+  },
+  methods: {
+    addA(val, event) {
+      if(event) {
+        event.preventDefault();
+      }
+      this.a += val;
+    }
+  }
+}
+</script>
+```
+
+### 事件修饰符
+`v-on` 提供了事件修饰符。修饰符是由点开头的指令后缀来表示的。Vue提供了事件绑定的语法糖，我们在标签中可直接使用形如`v-on:click`，`@click`，`@focus`的形式绑定事件监听器，并且可以使用修饰符对事件进行`option`设置。
+
+- `.stop` 阻止事件继续传播
+- `.prevent` 阻止标签默认行为
+- `.capture` 使用事件捕获模式,即元素自身触发的事件先在此处处理，然后才交由内部元素进行处理
+- `.self` 只当在 event.target 是当前元素自身时触发处理函数
+- `.once` 事件将只会触发一次
+- `.passive` 告诉浏览器你不想阻止事件的默认行为
+
+```html
+<!-- 阻止单击事件继续传播 -->
+<a v-on:click.stop="doThis"></a>
+
+<!-- 提交事件不再重载页面 -->
+<form v-on:submit.prevent="onSubmit"></form>
+
+<!-- 修饰符可以串联 -->
+<a v-on:click.stop.prevent="doThat"></a>
+
+<!-- 只有修饰符 -->
+<form v-on:submit.prevent></form>
+
+<!-- 添加事件监听器时使用事件捕获模式 -->
+<!-- 即内部元素触发的事件先在此处理，然后才交由内部元素进行处理 -->
+<div v-on:click.capture="doThis">...</div>
+
+<!-- 只当在 event.target 是当前元素自身时触发处理函数 -->
+<!-- 即事件不是从内部元素触发的 -->
+<div v-on:click.self="doThat">...</div>
+
+<!-- 点击事件将只会触发一次 -->
+<a v-on:click.once="doThis"></a>
+
+<!-- 滚动事件的默认行为 (即滚动行为) 将会立即触发 -->
+<!-- 而不会等待 `onScroll` 完成  -->
+<!-- 这其中包含 `event.preventDefault()` 的情况 -->
+<div v-on:scroll.passive="onScroll">...</div>
+```
+
+### 按键修饰符
+
+在监听键盘事件时，我们经常需要检查详细的按键。Vue 允许为 v-on 在监听键盘事件时添加按键修饰符：
+```html
+<!-- 只有在 `key` 是 `Enter` 时调用 `vm.submit()` -->
+<input v-on:keyup.enter="submit">
+```
+你可以直接将 `KeyboardEvent.key` 暴露的任意有效按键名转换为 `kebab-case` 来作为修饰符。
+
+```html
+<input v-on:keyup.page-down="onPageDown">
+```
+
+
+Vue 提供了绝大多数常用的按键码的别名：
+
+- `.enter`
+- `.tab`
+- `.delete` (捕获“删除”和“退格”键)
+- `.esc`
+- `.space`
+- `.up`
+- `.down`
+- `.left`
+- `.right`
+
+### 系统修饰键
+可以用如下修饰符来实现仅在按下相应按键时才触发鼠标或键盘事件的监听器。
+
+- `.ctrl`
+- `.alt`
+- `.shift`
+- `.meta`
+
+```html
+<!-- Alt + C -->
+<input v-on:keyup.alt.67="clear">
+
+<!-- Ctrl + Click -->
+<div v-on:click.ctrl="doSomething">Do something</div>
+```
+
+### `.exact` 修饰符
+
+`.exact` 修饰符允许你控制由精确的系统修饰符组合触发的事件。
+```html
+<!-- 即使 Alt 或 Shift 被一同按下时也会触发 -->
+<button v-on:click.ctrl="onClick">A</button>
+
+<!-- 有且只有 Ctrl 被按下的时候才触发 -->
+<button v-on:click.ctrl.exact="onCtrlClick">A</button>
+
+<!-- 没有任何系统修饰符被按下的时候才触发 -->
+<button v-on:click.exact="onClick">A</button>
+```
+
+### 鼠标按钮修饰符
+
+- `.left`
+- `.right`
+- `.middle`
+
+这些修饰符会限制处理函数仅响应特定的鼠标按钮。
+
+
+## 表单输入绑定
+
+`v-model`在\<input>、\<textarea>、\<select>元素上创建双向数据绑定。根据控件类型自动选取正确的方法来更新元素。`v-model` 本质上不过是语法糖。它负责监听用户的输入事件以更新数据，并对一些极端场景进行一些特殊处理。
+
+>`v-model` 会忽略所有表单元素的 `value`、`checked`、`selected`的初始值而总是将 Vue 实例的数据作为数据来源。你应该通过 JavaScript 在组件的 `data` 选项中声明初始值。
+
+`v-model` 在内部为不同的输入元素使用不同的 `property` 并抛出不同的事件：
+
+- `text` 和 `textarea` 元素使用 `value` property 和 `input` 事件；
+- `checkbox` 和 `radio` 使用 `checked` property 和 `change` 事件；
+- `select` 字段将 `value` 作为 `prop` 并将 `change` 作为事件。
+
+### 文本
+```html
+<input v-model="message" placeholder="edit me">
+<p>Message is: {{ message }}</p>
+```
+
+### 多行文本
+```html
+<span>Multiline message is:</span>
+<p style="white-space: pre-line;">{{ message }}</p>
+<br>
+<textarea v-model="message" placeholder="add multiple lines"></textarea>
+```
+
+### 复选框
+单个复选框，绑定到布尔值：
+```html
+<input type="checkbox" id="checkbox" v-model="checked">
+<label for="checkbox">{{ checked }}</label>
+```
+
+多个复选框，绑定到同一个数组：
+```html
+<input type="checkbox" id="jack" value="Jack" v-model="checkedNames">
+<label for="jack">Jack</label>
+<input type="checkbox" id="john" value="John" v-model="checkedNames">
+<label for="john">John</label>
+<input type="checkbox" id="mike" value="Mike" v-model="checkedNames">
+<label for="mike">Mike</label>
+<br>
+<span>Checked names: {{ checkedNames }}</span>
+
+<script>
+new Vue({
+  el: '...',
+  data: {
+    checkedNames: []
+  }
+})
+</script>
+```
+
+### 单选按钮
+```html
+<div id="example-4">
+  <input type="radio" id="one" value="One" v-model="picked">
+  <label for="one">One</label>
+  <br>
+  <input type="radio" id="two" value="Two" v-model="picked">
+  <label for="two">Two</label>
+  <br>
+  <span>Picked: {{ picked }}</span>
+</div>
+<script>
+new Vue({
+  el: '#example-4',
+  data: {
+    picked: ''
+  }
+})
+</script>
+```
+
+### 选择框
+单选时：
+```html
+<div id="example-5">
+  <select v-model="selected">
+    <option disabled value="">请选择</option>
+    <option>A</option>
+    <option>B</option>
+    <option>C</option>
+  </select>
+  <span>Selected: {{ selected }}</span>
+</div>
+<script>
+new Vue({
+  el: '...',
+  data: {
+    selected: ''
+  }
+})
+</script>
+```
+
+多选时 (绑定到一个数组)：
+```html
+<div id="example-6">
+  <select v-model="selected" multiple style="width: 50px;">
+    <option>A</option>
+    <option>B</option>
+    <option>C</option>
+  </select>
+  <br>
+  <span>Selected: {{ selected }}</span>
+</div>
+<script>
+new Vue({
+  el: '#example-6',
+  data: {
+    selected: []
+  }
+})
+</script>
+```
+用 v-for 渲染的动态选项：
+```html
+<select v-model="selected">
+  <option v-for="option in options" v-bind:value="option.value">
+    {{ option.text }}
+  </option>
+</select>
+<span>Selected: {{ selected }}</span>
+<script>
+new Vue({
+  el: '...',
+  data: {
+    selected: 'A',
+    options: [
+      { text: 'One', value: 'A' },
+      { text: 'Two', value: 'B' },
+      { text: 'Three', value: 'C' }
+    ]
+  }
+})
+</script>
+```
+
+### 值绑定
+对于单选按钮，复选框及选择框的选项，`v-model` 绑定的值通常是静态字符串 (对于复选框也可以是布尔值)：
+```html
+<!-- 当选中时，`picked` 为字符串 "a" -->
+<input type="radio" v-model="picked" value="a">
+
+<!-- `toggle` 为 true 或 false -->
+<input type="checkbox" v-model="toggle">
+
+<!-- 当选中第一个选项时，`selected` 为字符串 "abc" -->
+<select v-model="selected">
+  <option value="abc">ABC</option>
+</select>
+```
+但是有时我们可能想把值绑定到 Vue 实例的一个动态 `property` 上，这时可以用 `v-bind` 实现，并且这个 property 的值可以不是字符串。
+
+### 复选框
+```html
+<input
+  type="checkbox"
+  v-model="toggle"
+  true-value="yes"
+  false-value="no"
+>
+```
+```js
+// 当选中时
+vm.toggle === 'yes'
+// 当没有选中时
+vm.toggle === 'no'
+```
+
+>这里的`true-value` 和 `false-value` attribute 并不会影响输入控件的 `value` attribute，因为浏览器在提交表单时并不会包含未被选中的复选框。如果要确保表单中这两个值中的一个能够被提交，(即“`yes`”或“`no`”)，请换用单选按钮。
+
+### 单选按钮
+```html
+<input type="radio" v-model="pick" v-bind:value="a">
+```
+```js
+// 当选中时
+vm.pick === vm.a
+```
+
+### 选择框的选项
+```html
+<select v-model="selected">
+    <!-- 内联对象字面量 -->
+  <option v-bind:value="{ number: 123 }">123</option>
+</select>
+```
+```js
+// 当选中时
+typeof vm.selected // => 'object'
+vm.selected.number // => 123
+```
+
+### 修饰符
+`.lazy`
+在默认情况下，`v-model` 在每次 `input` 事件触发后将输入框的值与数据进行同步 (除了上述输入法组合文字时)。你可以添加 `lazy` 修饰符，从而转为在 `change` 事件_之后_进行同步：
+```html
+<!-- 在“change”时而非“input”时更新 -->
+<input v-model.lazy="msg">
+```
+
+`.number`
+如果想自动将用户的输入值转为数值类型，可以给 `v-model` 添加 `number` 修饰符：
+```html
+<input v-model.number="age" type="number">
+```
+这通常很有用，因为即使在 `type="number"` 时，`HTML` 输入元素的值也总会返回字符串。如果这个值无法被 `parseFloat()` 解析，则会返回原始的值。
+
+`.trim`
+如果要自动过滤用户输入的首尾空白字符，可以给 `v-model` 添加 `trim` 修饰符：
+```html
+<input v-model.trim="msg">
+```
+
