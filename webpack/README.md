@@ -364,3 +364,260 @@ module.exports = {
 npm i -D extract-text-webpack-plugin
 ```
 
+## 打包图片、字体、媒体等文件
+[`file-loader`](https://v4.webpack.js.org/loaders/file-loader/) 就是在 `JavaScript` 代码里 `import/require` 一个文件时，会将该文件生成到输出目录，并且在 `JavaScript` 代码里返回该文件的地址。
+
+安装
+```bash
+npm i --save-dev file-loader
+```
+
+```js
+module.exports = {
+  // ..
+  module: {
+    rules: [
+      {
+        test: /\.(jpe?g|png|git)$/i,
+        use: [
+          {
+            loader: "file-loader",
+            options: {
+              name: "[name].[hash:8].[ext]",
+              outputPath: "pics"
+            },
+          },
+        ],
+      },
+    ],
+  }
+};
+```
+上面的配置会将图片资源打包至`pics`目录下.
+
+`file-loader`常用options配置
+- `name`: 类型: `String|Function` 默认: '`[contenthash].[ext]`'， 打包后的文件名。
+- `outputPath`: 类型: `String|Function`, 保存打包后的文件目录。
+- `publicPath`: 类型: `String|Function`, 默认: `__webpack_public_path__`+ `outputPath`, 公开访问路径。
+
+常用占位符：
+- `[ext]`: 源文件后缀
+- `[name]`: 源文件名称
+- `[hash]`: 文件内容`hash`
+
+
+`url-loader` 功能与 `file-loader` 类似，如果文件小于限制的大小。则会返回 `base64` 编码，否则使用 `file-loader` 将文件移动到输出的目录中。
+
+
+```js
+module.exports = {
+  // ..
+  module: {
+    rules: [
+      {
+        test: /\.(jpe?g|png|git)$/i,
+        use: [
+          {
+            loader: "url-loader",
+            options: {
+              limit: 10240,
+              fallback: {
+                loader: "file-loader",
+                options: {
+                  name: "img/[name].[hash:8].[ext]",
+                },
+              },
+            },
+          },
+        ],
+      },
+    ],
+  }
+};
+```
+
+`options`配置
+- `limit`: 文件限制大小，如果小于限制，则会返回 `base64` 编码。
+- `fallback`: 当文件大小超出限制时使用另外一个`loader`
+
+上方的配置大小超过`10k`的图片使用`file-loader`，小于`10k`就用`base64`编码。
+来看看小于`10k`最终会被打包成
+```js
+ "data:image/png;base64,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"
+```
+
+图片的`url`地址被默认转化为了base64格式，如果一张图片太大的话，这样的转换反而降低效率,所以还不如用`http`请求.
+
+媒体跟字体的打包也跟图片一样。
+
+
+`file-loader` 和 `url-loader` 在 `webpack5` 就弃用了，取而代之是[资源模块(`asset module`)](https://webpack.docschina.org/guides/asset-modules/)。
+
+
+## 资源模块
+资源模块(`asset module`)是一种模块类型，它允许使用资源文件（字体，图标等）而无需配置额外 `loader`。
+
+通过添加 4 种新的模块类型，来替换所有这些 `loader`:
+- `asset/resource` 发送一个单独的文件并导出`URL`。之前通过使用 `file-loader` 实现。
+- `asset/inline` 导出一个资源的 `data URI`。之前通过使用 `url-loader` 实现。
+- `asset/source` 导出资源的源代码。之前通过使用 `raw-loader` 实现。
+- `asset` 在导出一个 data URI 和发送一个单独的文件之间自动选择。之前通过使用 `url-loader`，并且配置资源体积限制实现。
+
+
+### `Resource`资源
+```js
+module.exports = {
+  // ..
+  module: {
+    rules: [
+      {
+        test: /\.png/,
+        type: "asset/resource",
+      },
+    ],
+  },
+};
+```
+所有 `.png` 文件都将被发送到输出目录，并且其路径将被注入到 `bundle` 中
+
+#### 自定义输出文件名
+默认情况下，`asset/resource` 模块以 `[hash][ext][query]` 文件名发送到输出目录。不过有以下几个方法对输出的文件名进行修改。
+
+1. `output.assetModuleFilename`
+```js
+module.exports = {
+  output: {
+    filename: "main.js",
+    path: path.resolve(__dirname, "dist"),
+    clean: true,
+
+    // 修改模板字符串
+    assetModuleFilename: "images/[hash][ext][query]",
+  },
+  module: {
+    rules: [
+      {
+        test: /\.png/,
+        type: "asset/resource",
+      },
+    ],
+  },
+};
+```
+
+2. 将某些资源发送到指定目录
+
+```js
+module.exports = {
+  output: {
+    filename: "main.js",
+    path: path.resolve(__dirname, "dist"),
+    clean: true,
+    assetModuleFilename: "images/[hash][ext][query]",
+  },
+  module: {
+    rules: [
+      {
+        test: /\.png/,
+        type: "asset/resource",
+      },
+      {
+        test: /\.html/,
+        type: "asset/resource",
+
+        // 将文件发送到输出目录中
+        generator: {
+          filename: "static/[hash][ext][query]",
+        },
+      },
+    ],
+  }
+};
+```
+
+`Rule.generator.filename` 与 `output.assetModuleFilename` 相同，并且仅适用于 `asset` 和 `asset/resource` 模块类型。
+
+### `inline`资源
+```js
+module.exports = {
+  // ..
+  module: {
+    rules: [
+      {
+        test: /\.png/,
+        type: "asset/inline",
+      },
+      {
+        test: /\.svg/,
+        type: "asset/inline",
+      },
+    ],
+  },
+};
+```
+所有 `.svg`和`.png` 文件都将作为 `data URI` 注入到 `bundle` 中。
+
+
+### `source`资源
+
+```js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.txt/,
+        type: "asset/source",
+      },
+    ],
+  }
+};
+```
+
+### 通用资源类型
+
+将`type`值设置成`asset`,`webpack` 将按照默认条件，自动地在 `resource` 和 `inline` 之间进行选择：小于 `8kb` 的文件，将会视为 `inline` 模块类型，否则会被视为 `resource` 模块类型。
+
+```js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.png/,
+        type: "asset",
+      },
+      {
+        test: /\.svg/,
+        type: "asset",
+      },
+    ],
+  }
+};
+```
+
+也可以在`Rule.parser.dataUrlCondition.maxSize` 配置中修改限制条件。
+```js
+module.exports = {
+  module: {
+    rules: [
+      {
+        test: /\.png/,
+        type: "asset",
+        parser: {
+          dataUrlCondition: {
+            maxSize: 1 * 1024,
+          },
+        },
+      },
+      {
+        test: /\.svg/,
+        type: "asset",
+        parser: {
+          dataUrlCondition: {
+            maxSize: 0.5 * 1024,
+          },
+        },
+      },
+    ],
+  },
+};
+```
