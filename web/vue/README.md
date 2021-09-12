@@ -2003,3 +2003,112 @@ vm.selected.number // => 123
 <input v-model.trim="msg">
 ```
 
+## 虚拟DOM
+虚拟DOM（`Virtual DOM`）是对`DOM`的`JS`抽象表示，它们是`JS`对象，能够描述`DOM`结构和关系。应用
+的各种状态变化会作用于虚拟`DOM`，最终映射到`DOM`上.
+
+![虚拟DOM](./images/虚拟DOM.png)
+
+
+**优点**
+- 虚拟DOM轻量、快速：当它们发生变化时通过新旧虚拟`DOM`比对可以得到最小`DOM`操作量，从而提升性能和用户体验。
+- 跨平台：将虚拟`dom`更新转换为不同运行时特殊操作实现跨平台。
+- 兼容性：还可以加入兼容性代码增强操作的兼容性。
+
+**必要性**
+
+`vue 1.0`中有细粒度的数据变化侦测，它是不需要虚拟`DOM`的，但是细粒度造成了大量开销，这对于大型项目来说是不可接受的。因此，`vue 2.0`选择了中等粒度的解决方案，每一个组件一个`watcher`实例，这样状态变化时只能通知到组件，再通过引入虚拟`DOM`去进行比对和渲染。
+
+来看看虚拟`DOM`在`vue`中是怎么实现的。
+
+src/core/instance/lifecycle.js
+渲染、更新组件
+```js
+// 定义更新函数
+const updateComponent = () => { // 实际调用是在lifeCycleMixin中定义的_update和renderMixin中定义的_render 
+  vm._update(vm._render(), hydrating)
+}
+
+// 执行挂载的时候新建一个watcher
+new Watcher(vm, updateComponent)
+```
+
+
+_render src/core/instance/render.js
+生成虚拟dom
+```js
+// 添加render方法
+Vue.prototype._render = function() {
+  
+  // 父节点处理
+
+  vnode = render.call(vm._renderProxy, vm.$createElement)
+
+  // 数组类型处理
+
+  return vnode;
+}
+```
+
+真正用来创建`vnode`树的函数是`vm.$createElement`。
+```js
+// 柯里化写法
+vm.$createElement = (a, b, c, d) => createElement(vm, a, b, c, d, true)
+```
+
+src/core/vdom/create-element.js
+`$createElement()`是对`createElement`函数的封装
+```js
+function _createElement(context, tag, data, children, normalizationType) {
+
+  // 处理各种非正常情况
+
+  vnode = new VNode( // 创建虚拟节点
+        config.parsePlatformTagName(tag), data, children,undefined, undefined, context
+      )
+
+  // 处理组件
+  vnode = createComponent(tag, data, context, children)
+
+}
+```
+
+src/core/vdom/reate-component.js
+用于创建组件并返回`VNode`
+
+**`VNode`**
+`render`返回的一个`VNode`实例，它的`children`还是`VNode`，最终构成一个树，就是虚拟`DOM`树，
+src\core\vdom\vnode.js
+```js
+```
+
+
+src/core/instance/lifecycle.js
+`update`负责更新`dom`，转换`vnode`为`dom`
+```js
+```
+
+
+src/platforms/web/runtime/index.js
+`__patch__`是在平台特有代码中指定的
+```js
+Vue.prototype.__patch__ = inBrowser ? patch : noop
+```
+
+`patch`是`createPatchFunction`的返回值，传递`nodeOps`和`modules`是`web`平台特别实现
+```js
+export const patch: Function = createPatchFunction({ nodeOps, modules })
+```
+
+src/platforms/web/runtime/node-ops.js
+定义各种原生`dom`基础操作方法
+```js
+
+```
+
+src/platforms/web/runtime/modules/index.js
+`modules` 定义了属性更新实现
+```js
+
+```
+
