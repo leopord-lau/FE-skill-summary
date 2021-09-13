@@ -111,7 +111,7 @@ console.log(buf4.toString()); // a实例
 
 ```
 
-**http**
+### `http`
 
 用于创建`web`服务的模块。
 
@@ -133,7 +133,7 @@ const http = require('http');
 const server = http.createServer((request, response) => { 
   const {url,method} = request;
   if(url === '/' && method === 'GET'){
-    response.end('响应/请求')
+    response.end('响应请求')
   }else if(url === '/api' && method === "GET"){ // 返回一个json数据
     response.writeHead(200,{'Content-Type':'application/json'})
     response.end(JSON.stringify([{code:200,message:'访问成功'}]))
@@ -144,7 +144,7 @@ server.listen(3000,()=>{
 });
 ```
 
-**stream**
+### `stream`
 
 用于node中流数据的交互
 
@@ -153,9 +153,11 @@ const fs = require('fs')
 const read = fs.createReadStream('./b.js'); // 创建一个读取流读取b文件
 const write = fs.createWriteStream('./c.js') // 创建一个写入流写入c文件
 read.pipe(write) // 创建一个管道，读取流流入到写入流中
+
+
 ```
 
-**events**
+### `events`
 
 事件驱动，是node的基石，几乎被所有的模块依赖。
 
@@ -173,12 +175,13 @@ emitter.emit('event1','触发吧')
 ```javascript
 emitter.emit('error');
 ```
-大多数时候我们不会直接使用 EventEmitter，而是在对象中继承它。包括 fs、net、http 在内的，只要是支持事件响应的核心模块都是 EventEmitter 的子类。
+大多数时候我们不会直接使用 `EventEmitter`，而是在对象中继承它。包括 `fs`、`net`、`http` 在内的，只要是支持事件响应的核心模块都是 `EventEmitter` 的子类。
 
-**os**
+### `os`
 
 提供了一些基本的系统操作函数
 ```javascript
 const os = require('os')
 const mem = os.freemem() / os.totalmem() * 100; 
 console.log(`内存占用率${mem.toFixed(2)}%`)
+```
