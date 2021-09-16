@@ -2101,14 +2101,103 @@ export const patch: Function = createPatchFunction({ nodeOps, modules })
 ```
 
 src/platforms/web/runtime/node-ops.js
-定义各种原生`dom`基础操作方法
-```js
+定义各种原生`dom`基础操作方法，`createElment`等
 
-```
 
 src/platforms/web/runtime/modules/index.js
-`modules` 定义了属性更新实现
-```js
+`modules` 定义了属性更新实现，`style`等
 
+
+src/core/vdom/patch.js
+
+通过同层的树节点进行比较而非对树进行逐层搜索遍历的方式，所以时间复杂度只有`O(n)`，是一种相当高效的算法。
+
+同层级只做三件事：增删改。具体规则是：`new VNode`不存在就删`old VNode`不存在就增；都存在就比较类型，类型不同直接替换、类型相同执行更新；
+![同层级添加节点](./images/同层级处理节点.png)
+
+`patchVnode`
+两个`VNode`类型相同，就执行更新操作，包括三种类型操作：属性更新`PROPS`、文本更新`TEXT`、子节点更新`REORDER`。
+
+```js
+function patchVnode(oldVnode, vnode, insertedVnodeQueue, ownerArray, index, removeOnly) {
+
+  // 新旧节点都是静态
+  if(isTrue(vnode.isStatic) && isTrue(oldVnode.isStatic) && (isTrue(vnode.isCloned) || isTrue(vnode.isOnce))) {
+    vnode.componentInstance = oldVnode.componentInstance
+      return
+  }
+
+  // 新旧节点都有子节点
+  if(isDef(oldCh) && isDef(ch)) {
+    if (oldCh !== ch) updateChildren(elm, oldCh, ch, insertedVnodeQueue, removeOnly) // 进行diff操作
+  
+  // 旧节点不存在子节点
+  } else if(isDef(ch)) {
+    if (process.env.NODE_ENV !== 'production') {
+      checkDuplicateKeys(ch)
+    }
+    if (isDef(oldVnode.text)) nodeOps.setTextContent(elm, '') // 删除节点中可能存在的文本节点
+    addVnodes(elm, null, ch, 0, ch.length - 1, insertedVnodeQueue)
+  
+  // 新节点不存在子节点
+  } else if(isDef(oldCh)) {
+    removeVnodes(elm, oldCh, 0, oldCh.length - 1) // 直接删除掉
+  }
+  if (oldVnode.text !== vnode.text) { // 都不存在子节点，进行文本替换
+    nodeOps.setTextContent(elm, vnode.text)
+  }
+}
 ```
 
+
+`patchVnode`具体规则：
+1. 如果新旧`VNode`都是静态的，那么只需要替换`elm`以及`componentInstance`即可。
+2. 新老节点均有`children`子节点，则对子节点进行`diff`操作，调用`updateChildren`
+3. 如果老节点没有子节点而新节点存在子节点，先清空老节点`DOM`的文本内容，然后为当前`DOM`节点加入子节点。
+4. 当新节点没有子节点而老节点有子节点的时候，则移除该`DOM`节点的所有子节点。
+5. 当新老节点都无子节点的时候，只是文本的替换。
+
+
+`updateChildren`
+
+
+`updateChildren`主要作用是用一种较高效的方式比对新旧两个`VNode`的`children`得出最小操作补丁。执行一个双循环是传统方式，`vue`中针对`web`场景特点做了特别的算法优化。
+![新旧节点对比](./images/新旧节点对比.png)
+
+在新老两组VNode节点的左右头尾两侧都有一个变量标记，在遍历过程中这几个变量都会向中间靠拢。 当`oldStartIdx` > `oldEndIdx`或者`newStartIdx` > `newEndIdx`时结束循环。
+
+下面是遍历规则：
+
+首先，`oldStartVnode`、`oldEndVnode`与`newStartVnode`、`newEndVnode`两两交叉比较，共有4种比较方法。
+
+当 `oldStartVnode`和`newStartVnode` 或者 `oldEndVnode`和`newEndVnode` 满足`sameVnode`，直接将该`VNode`节点进行`patchVnode`即可，不需再遍历就完成了一次循环。如下图:
+
+![新旧节点首或尾相同](./images/新旧节点首或尾相同.png)
+
+如果`oldStartVnode`与`newEndVnode`满足`sameVnode`。说明`oldStartVnode`已经跑到了`oldEndVnode`后面去了，进行`patchVnode`的同时还需要将真实DOM节点移动到`oldEndVnode`的后面。
+
+![旧节点首和新节点尾相同](./images/旧节点首和新节点尾相同.png)
+
+如果`oldEndVnode`与`newStartVnode`满足`sameVnode`，说明`oldEndVnode`跑到了`oldStartVnode`的前
+面，进行`patchVnode`的同时要将`oldEndVnode`对应DOM移动到`oldStartVnode`对应DOM的前面。
+
+![旧节点尾和新节点首相同](./images/旧节点尾和新节点首相同.png)
+
+
+如果以上情况均不符合，则在`old VNode`中找与`newStartVnode`满足`sameVnode`的`vnodeToMove`，若存在执行`patchVnode`，同时将`vnodeToMove`对应DOM移动到`oldStartVnode`对应的DOM的前面。
+
+![旧节点非首尾和新节点首相同](./images/旧节点非首尾和新节点首相同.png)
+
+当然也有可能`newStartVnode`在`old VNode`节点中找不到一致的`key`，或者是即便`key`相同却不是`sameVnode`，这个时候会调用`createElm`创建一个新的DOM节点。
+
+![新节点](./images/新节点.png)
+
+至此循环结束，但是我们还需要处理剩下的节点。
+
+当结束时`oldStartIdx` > `oldEndIdx`，这个时候旧的`VNode`节点已经遍历完了，但是新的节点还没有。说明了新的`VNode`节点实际上比老的`VNode`节点多，需要将剩下的`VNode`对应的`DOM`插入到真实`DOM`中，此时调用`addVnodes`（批量调用`createElm`接口）。
+
+![多个新节点](./images/多个新增节点.png)
+
+但是，当结束时`newStartIdx` > `newEndIdx`时，说明新的`VNode`节点已经遍历完了，但是老的节点还有剩余，需要从文档中删的节点删除。
+
+![移除多个节点](./images/移除多个节点.png)
