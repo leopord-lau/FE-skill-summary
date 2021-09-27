@@ -3,7 +3,7 @@ export interface Llement extends Array<any> {
   props: Props;
   key: string,
   child_num: number,
-  children: Llement | string;
+  children: Array<Llement | string>;
   _render: () => Element;
 }
 
@@ -12,7 +12,7 @@ export interface Props {
 }
 
 export class Llement {
-  constructor(tagName: string, props: Props, children: Llement | string) {
+  constructor(tagName: string, props: Props, children: Array<Llement | string>) {
     this.tagName = tagName;
     this.props = props;
     this.children = children;
