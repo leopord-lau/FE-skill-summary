@@ -23,3 +23,21 @@ export type diffMap = Object & {
   moveList: Array<moveMap>,
   children: Array<Llement | string | null>
 }
+
+export type domPatchType = {
+  REPLACE: number,
+  REORDER: number,
+  PROPS: number,
+  TEXT: number,
+  REMOVE: number,
+  ADD: number
+}
+
+export let domPatch: domPatchType = {
+  REPLACE: 0,
+  REORDER: 1,
+  PROPS: 2,
+  TEXT: 3,
+  REMOVE: 4,
+  ADD: 5
+}

@@ -1,23 +1,5 @@
 import { Llement } from "./llement"
-import { moveMap } from "./types";
-
-type domPatchType = {
-  REPLACE: number,
-  REORDER: number,
-  PROPS: number,
-  TEXT: number,
-  REMOVE: number,
-  ADD: number
-}
-
-export let domPatch: domPatchType = {
-  REPLACE: 0,
-  REORDER: 1,
-  PROPS: 2,
-  TEXT: 3,
-  REMOVE: 4,
-  ADD: 5
-}
+import {  domPatch, moveMap } from "./types";
 
 type walkerType = Object & {
   index: number;
@@ -67,7 +49,7 @@ function startPatches(node: Node, currentPatches: Array<moveMap>): void {
 }
 
 function reorderChildren(node: Node, moveList: Array<moveMap>): void {
-  let staticNodeList: Array<any> = Array(node.childNodes);
+  let staticNodeList: Array<any> = Array.prototype.slice.call(node.childNodes);
   let keyMap: object = {};
 
   staticNodeList.forEach(node => {

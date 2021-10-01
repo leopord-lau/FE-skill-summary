@@ -1,6 +1,5 @@
 import { Llement } from "./llement";
-import { domPatch } from "./patch";
-import { moveMap, diffMap } from "./types";
+import { moveMap, diffMap, domPatch } from "./types";
 
 
 // 新旧节点差异比较（文本、属性、子节点）
@@ -114,7 +113,6 @@ function getDiffList(oldChildList: Array<Llement | string>, newChildList: Array<
     // TODO 顺序是不是不对
     } else {
       let freeItem: Llement | string = newFree[freeIndex++];
-      console.log(freeItem);
       if(freeItem) {
         children.push(freeItem);
       } else {
