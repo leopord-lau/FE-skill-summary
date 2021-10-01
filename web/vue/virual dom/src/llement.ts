@@ -1,14 +1,13 @@
+import { Props } from "./types";
+
 export interface Llement extends Array<any> {
   tagName: string;
   props: Props;
   key: string,
   child_num: number,
-  children: Array<Llement | string>;
-  _render: () => Element;
-}
-
-export interface Props {
-  key: string
+  children: Array<Llement | string>,
+  _render: () => Element,
+  _diff: (oldNode: Llement, newNode: Llement) => object
 }
 
 export class Llement {

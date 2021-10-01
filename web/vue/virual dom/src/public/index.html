@@ -11,6 +11,8 @@
 <script>
   console.log(window.vdom)
   const el = window.vdom.$createElement;
+  const diff = window.vdom._diff
+  const patch = window.vdom._patch;
   var ul = el('div',{id:'virtual-dom'},[
       el('p',{},['Virtual DOM']),
       el('ul', { id: 'list' }, [
@@ -24,5 +26,19 @@
     console.log(ul);
     ulRoot = ul._render();
     document.body.appendChild(ulRoot);
+    var ul2 = el('div',{id:'virtual-dom'},[
+      el('p',{},['Virtual DOM']),
+      el('ul', { id: 'list' }, [
+        el('li', { class: 'item' }, ['Item 21']),
+        el('li', { class: 'item' }, ['Item 23'])
+      ]),
+      el('p',{},['Hello World'])
+    ]) 
+    setTimeout(() => {
+      var patches = diff(ul,ul2);
+      console.log('patches:',patches);
+      patch(ulRoot,patches);
+    }, 3000)
+    
 </script>
 </html>
