@@ -218,3 +218,174 @@ node index.js -n 1 2 3 4 -c a b c
 ```
 
 
+7. 版本
+`.version()`方法可以设置版本，其默认选项为`-V`和`--version`，设置了版本后，命令行会输出当前的版本号。
+
+```js
+program.version('v1.0.0')
+```
+
+版本选项也支持自定义设置选项名称，可以在`.version()`方法里再传递一些参数（长选项名称、描述信息），用法与`.option()`方法类似。
+
+```js
+program.version('v1.0.0', '-a --aversion', 'current version');
+```
+
+8. 使用`addOption`方法
+大多数情况下，选项均可通过`.option()`方法添加。但对某些不常见的用例，也可以直接构造`Option`对象，对选项进行更详尽的配置。
+
+```js
+program
+  .addOption(
+    new Option('-t, --timeout <delay>', 'timeout in seconds').default(
+      60,
+      'one minute'
+    )
+  )
+  .addOption(
+    new Option('-s, --size <type>', 'size').choices([
+      'small',
+      'medium',
+      'large',
+    ])
+  );
+```
+
+```bash
+node index.js -s small
+{ timeout: 60, size: 'small' }
+
+node index.js -s mini
+error: option '-s, --size <type>' argument 'mini' is invalid. Allowed choices are small, medium, large.
+```
+
+9. 自定义选项
+选项的参数可以通过自定义函数来处理，该函数接收两个参数，即用户新输入的参数值和当前已有的参数值（即上一次调用自定义处理函数后的返回值），返回新的选项参数值。 也就是`option`中的第三个参数。第四个参数就是初始值
+
+自定义函数适用场景包括参数类型转换，参数暂存，或者其他自定义处理的场景。
+```js
+program.option(
+  '-f --float <number>',
+  'process float argument',
+  (value, previous) => {
+    return Number(value) + previous;
+  },
+  2
+);
+```
+```bash
+node index.js -f 3
+{ float: 5 }
+```
+
+
+
+### 配置命令
+
+通过`.command()`或`.addCommand()`可以配置命令，有两种实现方式：为命令绑定处理函数，或者将命令单独写成一个可执行文件。子命令支持嵌套。
+
+`.command()`的第一个参数为命令名称。命令参数可以跟在名称后面，也可以用`.argument()`单独指定。参数可为必选的（尖括号表示）、可选的（方括号表示）或变长参数（点号表示，如果使用，只能是最后一个参数）。
+
+```js
+program
+  .command('clone <source> [destination]')
+  .description('clone a repository into a newly created directory')
+  .action((source, destination) => {
+    console.log('clone command called');
+  });
+```
+
+在`Command`对象上使用`.argument()`来按次序指定命令参数。该方法接受参数名称和参数描述。参数可为必选的（尖括号表示，例如`<required>`）或可选的(方括号表示，例如`[optional]`)。
+```js
+program
+  .command('login')
+  .description('login')
+  .argument('<username>', 'user')
+  .argument('[password]', 'password', 'no password')
+  .action((username, password) => {
+    console.log(`login, ${username} - ${password}`);
+  });
+```
+
+在参数名后加上`...`来声明可变参数，且只有最后一个参数支持这种用法。可变参数会以数组的形式传递给处理函数。
+```js
+program
+  .command('readFile')
+  .description('read multiple file')
+  .argument('<username>', 'user')
+  .argument('[password]', 'password', 'no password')
+  .argument('<filepath...>')
+  .action((username, password, args) => {
+    args.forEach((dir) => {
+      console.log('rmdir %s', dir);
+    });
+    console.log(`username: ${username}, pass: ${password}, args: ${args}`);
+  });
+```
+
+
+#### 声明统一参数
+
+命令处理函数的参数，为该命令声明的所有参数，除此之外还会附加两个额外参数：一个是解析出的选项，另一个则是该命令对象自身。
+
+```js
+program
+  .argument('<name>')
+  .option('-t, --title <title>', 'title to use before name')
+  .option('-d, --de')
+  .action((name, options, command) => {
+    console.log(name);
+    console.log(options);
+    console.log(command.name());
+  });
+```
+
+
+### 帮助信息
+帮助信息是 `Commander` 基于你的程序自动生成的，默认的帮助选项是`-h,--help`。
+```bash
+node index.js -h
+Usage: index [options]
+
+Options:
+  -h, --help  display help for command
+```
+
+#### 自定义
+使用`addHelpText`方法添加额外的帮助信息。
+```js
+program.addHelpText('after', `call help`);
+```
+
+```bash
+node index.js -h
+Usage: index [options]
+
+Options:
+  -h, --help  display help for command
+call help
+```
+
+`addHelpText`方法的第一个参数是添加的帮助信息展示的位置，
+包括如下：
+- `beforeAll`：作为全局标头栏展示
+
+- `before`：在内建帮助信息之前展示
+
+- `after`：在内建帮助信息之后展示
+
+- `afterAll`：作为全局末尾栏展示
+
+
+#### `showHelpAfterError`展示帮助信息
+```js
+program.showHelpAfterError();
+// 或者
+program.showHelpAfterError('(add --help for additional information)');
+```
+
+```bash
+node index.js -asd
+error: unknown option '-asd'
+(add --help for additional information)
+```
