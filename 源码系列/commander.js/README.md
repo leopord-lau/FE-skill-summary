@@ -638,9 +638,157 @@ command(nameAndArgs, actionOptsOrExecDesc, execOpts) {
 ```
 `action`用于注册命令回调。
 ```js
+action(fn) {
+  const listener = (args) => {
+    const expectedArgsCount = this._args.length;
+    const actionArgs = args.slice(0, expectedArgsCount);
+    if (this._storeOptionsAsProperties) {
+      actionArgs[expectedArgsCount] = this;
+    } else {
+      actionArgs[expectedArgsCount] = this.opts();
+    }
+    actionArgs.push(this);
 
+    return fn.apply(this, actionArgs);
+  };
+  this._actionHandler = listener;
+  return this;
+}
 ```
 
+
+接下来就是如何解析执行命令部分了。还记得我们之前解析`option`时的流程嘛
+`parse()` -> `_parseCommand()`， 在`parseOptions`方法中，我们还剩余了处理命令部分代码，现在来看一下。
+
+`源码解析：`
+```js
+parseOptions(argv) {
+  const operands = [];
+  const unknown = [];
+  let dest = operands;
+  const args = argv.slice();
+
+  while (args.length) {
+    // 解析option部分
+    // ...
+
+    // 当开启了enablePositionalOptions后， 会将命令后边的参数全部定义为未知参数，而不是命令选项，同时如果想要在子命令中启动enablePositionalOptions，需要在父命令中先开启。
+    if (
+      (this._enablePositionalOptions || this._passThroughOptions) &&
+      operands.length === 0 &&
+      unknown.length === 0
+    ) {
+      if (this._findCommand(arg)) {
+        operands.push(arg);
+        if (args.length > 0) unknown.push(...args);
+        break;
+      } else if (
+        arg === this._helpCommandName &&
+        this._hasImplicitHelpCommand()
+      ) {
+        operands.push(arg);
+        if (args.length > 0) operands.push(...args);
+        break;
+      } else if (this._defaultCommandName) {
+        unknown.push(arg);
+        if (args.length > 0) unknown.push(...args);
+        break;
+      }
+    }
+
+    if (this._passThroughOptions) {
+      dest.push(arg);
+      if (args.length > 0) dest.push(...args);
+      break;
+    }
+    dest.push(arg);
+  }
+  return { operands, unknown };
+}
+```
+没有开启`enablePositionalOptions`配置，命令及后边的参数都会保存在`operands`数组中，当开启后，命令后边的参数都会变成`unknown`。
+
+在解析了用户输入的参数后继续往下执行`_parseCommand`方法
+```js
+_parseCommand(operands, unknown) {
+  // 解析配置
+  const parsed = this.parseOptions(unknown);
+  this._parseOptionsEnv(); // after cli, so parseArg not called on both cli and env
+  operands = operands.concat(parsed.operands);
+  unknown = parsed.unknown;
+  this.args = operands.concat(unknown);
+
+  // 匹配找到命令, 使用子进程运行命令
+  if (operands && this._findCommand(operands[0])) {
+    return this._dispatchSubcommand(operands[0], operands.slice(1), unknown);
+  }
+
+  // 没找到命令就判断一下是否有帮助命令， 而且用户输入的第一个参数是help
+  if (this._hasImplicitHelpCommand() && operands[0] === this._helpCommandName) {
+    // 有且只有个命令
+    if (operands.length === 1) {
+      this.help();
+    }
+    // 执行第二条命令
+    return this._dispatchSubcommand(operands[1], [], [this._helpLongFlag]);
+  }
+  // 帮助命令也没有找到或者用户输入的第一个参数未知但是存在一个默认名字
+  if (this._defaultCommandName) {
+    outputHelpIfRequested(this, unknown); // Run the help for default command from parent rather than passing to default command
+    return this._dispatchSubcommand(
+      this._defaultCommandName,
+      operands,
+      unknown
+    );
+  }
+  // ...
+
+  const commandEvent = `command:${this.name()}`;
+  // 存在command处理器
+  if (this._actionHandler) {
+    checkForUnknownOptions();
+    // 处理参数
+    this._processArguments();
+
+    let actionResult;
+    actionResult = this._chainOrCallHooks(actionResult, 'preAction');
+    actionResult = this._chainOrCall(actionResult, () =>
+      this._actionHandler(this.processedArgs)
+    );
+    // 触发父命令
+    if (this.parent) this.parent.emit(commandEvent, operands, unknown); // legacy
+    actionResult = this._chainOrCallHooks(actionResult, 'postAction');
+    return actionResult;
+  }
+  // 触发父监听器
+  if (this.parent && this.parent.listenerCount(commandEvent)) {
+    checkForUnknownOptions();
+    this._processArguments();
+    this.parent.emit(commandEvent, operands, unknown);
+  // 处理参数
+  } else if (operands.length) {
+    if (this._findCommand('*')) {
+      return this._dispatchSubcommand('*', operands, unknown);
+    }
+    if (this.listenerCount('command:*')) {
+      this.emit('command:*', operands, unknown);
+    } else if (this.commands.length) {
+      this.unknownCommand();
+    } else {
+      checkForUnknownOptions();
+      this._processArguments();
+    }
+  // 不存在命令
+  } else if (this.commands.length) {
+    checkForUnknownOptions();
+    this.help({ error: true });
+  } else {
+    checkForUnknownOptions();
+    this._processArguments();
+  }
+}
+```
+到此，整个解析过程就完成了。
 
 
 #### 声明统一参数
@@ -670,6 +818,85 @@ Options:
   -h, --help  display help for command
 ```
 
+`源码解析：`
+`commander.js`提供了一个`help`类，但是它的方法都是静态的，允许被覆盖。在`command`类中有一个`createHelp`方法，通过`Object.assign()`方法覆盖`help`的原始方法。
+```js
+createHelp() {
+    return Object.assign(new Help(), this.configureHelp());
+}
+```
+
+`formatHelp`生成帮助文字，解析处理设置的`command`、`option`、`argument`等
+```js
+formatHelp(cmd, helper) {
+  const termWidth = helper.padWidth(cmd, helper);
+  const helpWidth = helper.helpWidth || 80;
+  const itemIndentWidth = 2;
+  const itemSeparatorWidth = 2;
+  // 格式化
+  function formatItem(term, description) {
+    if (description) {
+      const fullText = `${term.padEnd(
+        termWidth + itemSeparatorWidth
+      )}${description}`;
+      return helper.wrap(
+        fullText,
+        helpWidth - itemIndentWidth,
+        termWidth + itemSeparatorWidth
+      );
+    }
+    return term;
+  }
+  function formatList(textArray) {
+    return textArray.join('\n').replace(/^/gm, ' '.repeat(itemIndentWidth));
+  }
+
+  let output = [`Usage: ${helper.commandUsage(cmd)}`, ''];
+
+  // 描述符
+  const commandDescription = helper.commandDescription(cmd);
+  if (commandDescription.length > 0) {
+    output = output.concat([commandDescription, '']);
+  }
+
+  // 参数
+  const argumentList = helper.visibleArguments(cmd).map((argument) => {
+    return formatItem(
+      helper.argumentTerm(argument),
+      helper.argumentDescription(argument)
+    );
+  });
+  if (argumentList.length > 0) {
+    output = output.concat(['Arguments:', formatList(argumentList), '']);
+  }
+
+  // 选项
+  const optionList = helper.visibleOptions(cmd).map((option) => {
+    return formatItem(
+      helper.optionTerm(option),
+      helper.optionDescription(option)
+    );
+  });
+  if (optionList.length > 0) {
+    output = output.concat(['Options:', formatList(optionList), '']);
+  }
+
+  // 命令
+  const commandList = helper.visibleCommands(cmd).map((cmd) => {
+    return formatItem(
+      helper.subcommandTerm(cmd),
+      helper.subcommandDescription(cmd)
+    );
+  });
+  if (commandList.length > 0) {
+    output = output.concat(['Commands:', formatList(commandList), '']);
+  }
+
+  return output.join('\n');
+}
+```
+
+
 #### 自定义
 使用`addHelpText`方法添加额外的帮助信息。
 ```js
@@ -694,6 +921,76 @@ call help
 - `after`：在内建帮助信息之后展示
 
 - `afterAll`：作为全局末尾栏展示
+
+`源码解析：`
+在执行`addHelpText`方法后，会对该事件进行监听，同时执行输入帮助命令时会按顺序执行所有事件，从而实现自定义信息的展示。
+
+`addHelpText`
+```js
+addHelpText(position, text) {
+  const allowedValues = ['beforeAll', 'before', 'after', 'afterAll'];
+  // 过滤
+  if (!allowedValues.includes(position)) {
+    throw new Error(`Unexpected value for position to addHelpText.
+Expecting one of '${allowedValues.join("', '")}'`);
+  }
+  const helpEvent = `${position}Help`;
+  // 监听事件
+  this.on(helpEvent, (context) => {
+    let helpStr;
+    if (typeof text === 'function') {
+      helpStr = text({ error: context.error, command: context.command });
+    } else {
+      helpStr = text;
+    }
+    // Ignore falsy value when nothing to output.
+    if (helpStr) {
+      context.write(`${helpStr}\n`);
+    }
+  });
+  return this;
+}
+```
+
+`outputHelp`
+```js
+outputHelp(contextOptions) {
+  let deprecatedCallback;
+  if (typeof contextOptions === 'function') {
+    deprecatedCallback = contextOptions;
+    contextOptions = undefined;
+  }
+  const context = this._getHelpContext(contextOptions);
+  // 遍历触发所有祖先命令的 beforeAllHelp 事件
+  getCommandAndParents(this)
+    .reverse()
+    // 触发 beforeAllHelp
+    .forEach((command) => command.emit('beforeAllHelp', context));
+  // 触发 beforeHelp
+  this.emit('beforeHelp', context);
+
+  let helpInformation = this.helpInformation(context);
+  if (deprecatedCallback) {
+    helpInformation = deprecatedCallback(helpInformation);
+    if (
+      typeof helpInformation !== 'string' &&
+      !Buffer.isBuffer(helpInformation)
+    ) {
+      throw new Error('outputHelp callback must return a string or a Buffer');
+    }
+  }
+  context.write(helpInformation);
+  // 触发 help 指令
+  this.emit(this._helpLongFlag); // deprecated
+  // 触发 afterHelp
+  this.emit('afterHelp', context);
+  // 遍历触发所有祖先命令的 afterAllHelp 事件
+  getCommandAndParents(this).forEach((command) =>
+    // 触发 afterAllHelp
+    command.emit('afterAllHelp', context)
+  );
+}
+```
 
 
 #### `showHelpAfterError`展示帮助信息
