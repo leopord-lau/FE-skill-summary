@@ -1,16 +1,18 @@
-import { Llement } from "./llement"
-import {  domPatch, moveMap } from "./types";
+import { Vlement } from "./vlement"
+import {  domPatch, moveMap, keyMap } from "../utils/types";
 
-type walkerType = Object & {
+type walkerType = {
   index: number;
 }
 
-function patch(node: Node, patches: object): void {
+// 打补丁
+function patch(node: Node, patches: keyMap): void {
   let walker: walkerType = { index: domPatch.REPLACE };
   dsfWalk(node, walker, patches);
 }
 
-function dsfWalk(node: Node, walker: walkerType, patches: object): void {
+// 深度遍历
+function dsfWalk(node: Node, walker: walkerType, patches: keyMap): void {
   // 获取patch数组
   const currentPatches: Array<moveMap> = patches[walker.index];
   const len: number = node.childNodes ? node.childNodes.length : 0;
@@ -30,17 +32,17 @@ function startPatches(node: Node, currentPatches: Array<moveMap>): void {
   currentPatches.forEach(currentPatch => {
     switch (currentPatch.type) {
       case domPatch.REPLACE:
-        const newNode = (typeof currentPatch.node === 'string') ? document.createTextNode(currentPatch.node) : currentPatch.node._render();
-        node.parentNode.replaceChild(newNode, node);
+        const newNode = (typeof currentPatch.node === 'string') ? document.createTextNode(currentPatch.node) : currentPatch.node!._render();
+        node.parentNode!.replaceChild(newNode, node);
         break;
       case domPatch.REORDER:
-        reorderChildren(node, currentPatch.moves);
+        reorderChildren(node, currentPatch.moves!);
         break;
       case domPatch.PROPS:
-        setProps(node, currentPatch.props);
+        setProps(node, currentPatch.props!);
         break;
       case domPatch.TEXT:
-        node.textContent = currentPatch.content
+        node.textContent = currentPatch.content!
         break
       default:
         throw new Error('Unknown patch type ' + currentPatch.type)
@@ -48,14 +50,15 @@ function startPatches(node: Node, currentPatches: Array<moveMap>): void {
   })
 }
 
+// 重新排列
 function reorderChildren(node: Node, moveList: Array<moveMap>): void {
   let staticNodeList: Array<any> = Array.prototype.slice.call(node.childNodes);
-  let keyMap: object = {};
+  let keyMap: keyMap = {};
 
   staticNodeList.forEach(node => {
     // 元素节点
     if(node.nodeType === 1) {
-      const key: string = (<Element>node).getAttribute('key');
+      const key: string | null = (<Element>node).getAttribute('key');
       if(key) {
         keyMap[key] = node;
       }
@@ -63,7 +66,8 @@ function reorderChildren(node: Node, moveList: Array<moveMap>): void {
   })
 
   moveList.forEach(move => {
-    const i: number = move.index;
+    const i: number | undefined = move.index;
+    if(!i) return;
     // 移除节点
     if(move.type === domPatch.REMOVE) {
       if(staticNodeList[i] === node.childNodes[i]) {
@@ -71,11 +75,11 @@ function reorderChildren(node: Node, moveList: Array<moveMap>): void {
       }
       staticNodeList.splice(i, 1);
     } else if(move.type === domPatch.ADD) {
-      const newNode: Node = keyMap[(<Llement>move.item).key]
-        ? keyMap[(<Llement>move.item).key].cloneNode(true)
+      const newNode: Node = keyMap[(<Vlement>move.item).key]
+        ? keyMap[(<Vlement>move.item).key].cloneNode(true)
         : typeof (<string>move.item) === 'string'
           ? document.createTextNode(<string>move.item)
-          : (<Llement>move.item)._render();
+          : (<Vlement>move.item)._render();
       
       staticNodeList.splice(i, 0, newNode);
       node.insertBefore(newNode, node.childNodes[i] || null);
@@ -83,7 +87,7 @@ function reorderChildren(node: Node, moveList: Array<moveMap>): void {
   })
 }
 
-function setProps(node: Node, props: object): void {
+function setProps(node: Node, props: keyMap): void {
   let key: string;
   for (key in props) {
     if(props[key]) {

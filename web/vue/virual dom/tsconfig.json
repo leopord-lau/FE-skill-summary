@@ -1,43 +1,24 @@
 {
 
   "compilerOptions": {
-
       "baseUrl": ".",
-
       "paths": {
-
           "@/*": ["src/*"]
-
       },
-
       "module": "commonjs",
-
       "target": "es5",
-
       "sourceMap": true,
-
       "allowSyntheticDefaultImports": true,
-
       "esModuleInterop": true,
-
       "allowJs": true,
-
+      "outDir": "build",
   },
 
   "include": [
-
-      "src/ts/*",
-
       "src/*"
-
   ],
 
   "exclude": [
-
       "node_modules",
-
-      "dist"
-
   ]
-
 }
