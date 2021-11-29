@@ -41,6 +41,8 @@ babel src -d lib
 
 ### babel-core 核心库
 
+`babel`采用微内核架构，核心就是`babel-core`这个包。
+
 core，中文意思即核心。封装了Babel的核心功能。可已通过npm或yarn进行安装。
 ```bash
 npm install --save-dev @babel/core
@@ -111,3 +113,147 @@ if (opts) {
 }
 ```
 
+根据传入的入口文件夹`src`调用`handle`方法循环读取文件。
+```js
+  if (!cliOptions.skipInitialBuild) {
+    if (cliOptions.deleteDirOnStart) {
+      util.deleteDir(cliOptions.outDir);
+    }
+
+    fs.mkdirSync(cliOptions.outDir, { recursive: true });
+
+    startTime = process.hrtime();
+
+    for (const filename of cliOptions.filenames) {
+      compiledFiles += await handle(filename);
+    }
+
+    if (!cliOptions.quiet) {
+      logSuccess();
+      logSuccess.flush();
+    }
+  }
+```
+
+`handle`, 读取`src`目录下的所有文件后逐个传入到`handleFile`中处理。
+```js
+async function handle() {
+    ...
+    await handleFile(filename, path.dirname(filename))
+}
+```
+
+`handleFile`，将文件名及路径传入`write`方法中。
+```js
+async function handleFile() {
+    const written = await write(src, base);
+    ...
+}
+```
+
+在`write`方法中会执行`compile`方法
+```js
+async function write() {
+    ...
+    const res = await util.compile(src, {
+        ...babelOptions,
+        sourceFileName: slash(path.relative(dest + "/..", src)),
+      });
+    ...
+}
+```
+
+`compile`, 将文件地址和配置传入到 `babel.transformFile` 中处理。
+```js
+function compile(filename, opts) {
+    ...
+    opts = {
+    ...opts,
+    caller: CALLER,
+  };
+
+  return new Promise((resolve, reject) => {
+    babel.transformFile(filename, opts, (err, result) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
+  });
+}
+```
+
+至此 `babel-cli` 的工作就执行完毕，接着会进入到 `babel-core`中执行。
+
+babel-core/src/transform-file.ts
+`transformFile`
+```js
+const transformFile = transformFileRunner.errback
+
+const transformFileRunner = gensync<
+  (filename: string, opts?: InputOptions) => FileResult | null
+>(function* (filename, opts: InputOptions) {
+  const options = { ...opts, filename };
+
+  const config: ResolvedConfig | null = yield* loadConfig(options);
+  if (config === null) return null;
+
+  const code = yield* fs.readFile(filename, "utf8");
+  return yield* run(config, code);
+});
+```
+
+使用`gensync`库可以生成同步和异步两种方法，这里只使用了异步方法。向下执行 `run` 方法.
+
+```ts
+export function* run(
+  config: ResolvedConfig,
+  code: string,
+  ast?: t.File | t.Program | null,
+): Handler<FileResult> {
+  
+  const file = yield* normalizeFile(
+    config.passes,
+    normalizeOptions(config),
+    code,
+    ast,
+  );
+
+  const opts = file.opts;
+  try {
+    yield* transformFile(file, config.passes);
+  } catch (e) {
+    e.message = `${opts.filename ?? "unknown"}: ${e.message}`;
+    if (!e.code) {
+      e.code = "BABEL_TRANSFORM_ERROR";
+    }
+    throw e;
+  }
+
+  let outputCode, outputMap;
+  try {
+    if (opts.code !== false) {
+      ({ outputCode, outputMap } = generateCode(config.passes, file));
+    }
+  } catch (e) {
+    e.message = `${opts.filename ?? "unknown"}: ${e.message}`;
+    if (!e.code) {
+      e.code = "BABEL_GENERATE_ERROR";
+    }
+    throw e;
+  }
+
+  return {
+    metadata: file.metadata,
+    options: opts,
+    ast: opts.ast === true ? file.ast : null,
+    code: outputCode === undefined ? null : outputCode,
+    map: outputMap === undefined ? null : outputMap,
+    sourceType: file.ast.program.sourceType,
+  };
+}
+```
+
+这个方法主要做了三件事件：
+
+1. 通过 `normalizeFile` 将传入的文件转化为 `AST`。
+2. 通过 `transformFile` 处理 `AST` 产出新的 `AST`。
+3. 通过 `generateCode` 将新的 `AST` 转化为目标代码。
