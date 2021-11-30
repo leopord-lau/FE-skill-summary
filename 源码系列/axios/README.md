@@ -554,3 +554,314 @@ Axios.prototype.request = function request(config) {
 ```
 
 请求拦截器是在请求方法方法之前执行，因此不需要考虑请求响应的情况，直接遍历执行所有的方法就可以了，当其中一个拦截器出现错误时会中断整个请求。当执行完后发送请求，由于请求是异步的，因此响应拦截器也必须是异步的，所以通过`promise`的`then`方法串起来。
+
+
+## `dispatchRequest`
+
+在发送请求前，会进行一系列的操作:
+1. 判断该请求是否已经取消了
+```js
+throwIfCancellationRequested(config);
+```
+这个方法会判断请求体内的`cancel`是否已经执行了，如果执行了就会直接抛出原因，不会发送请求。
+
+
+2. 转换`data`，比如对 `post` 请求的 `data` 进行字符串化 `JSON.stringify(data)`
+
+```js
+config.data = transformData.call(
+  config,
+  config.data,
+  config.headers,
+  config.transformRequest
+);
+```
+通常来说，我们不需要传入一个`transformRequest`参数，直接使用默认的就可以。
+
+`transformRequest`
+```js
+transformRequest: [
+  function transformRequest(data, headers) {
+    normalizeHeaderName(headers, 'Accept');
+    normalizeHeaderName(headers, 'Content-Type');
+
+    // 满足的data类型
+    if (
+      utils.isFormData(data) ||
+      utils.isArrayBuffer(data) ||
+      utils.isBuffer(data) ||
+      utils.isStream(data) ||
+      utils.isFile(data) ||
+      utils.isBlob(data)
+    ) {
+      return data;
+    }
+    if (utils.isArrayBufferView(data)) {
+      return data.buffer;
+    }
+    if (utils.isURLSearchParams(data)) {
+      setContentTypeIfUnset(
+        headers,
+        'application/x-www-form-urlencoded;charset=utf-8'
+      );
+      return data.toString();
+    }
+    if (
+      utils.isObject(data) ||
+      (headers && headers['Content-Type'] === 'application/json')
+    ) {
+      setContentTypeIfUnset(headers, 'application/json');
+      return stringifySafely(data);
+    }
+    return data;
+  },
+],
+```
+
+如果你要自己写一个转换方法的，需要注意这个方法只满足`PUT`, `POST`, `PATCH`和`DELETE`这些方法，而且由于传入的是一个数组，最后一个方法必须返回`string`,`buffer`,`ArrayBuffer`,`FormData`,`Stream`类型的数据。
+
+
+3. 选择适配器 ( 浏览器端 `xhr` 和 `node` 端的 `http`)
+
+```js
+var adapter = config.adapter || defaults.adapter;
+```
+同样，适配器也可以自定义。
+
+我们看看默认的适配器
+```js
+function getDefaultAdapter() {
+  var adapter;
+  if (typeof XMLHttpRequest !== 'undefined') {
+    // For browsers use XHR adapter
+    adapter = require('./adapters/xhr');
+  } else if (
+    typeof process !== 'undefined' &&
+    Object.prototype.toString.call(process) === '[object process]'
+  ) {
+    // For node use HTTP adapter
+    adapter = require('./adapters/http');
+  }
+  return adapter;
+}
+```
+逻辑很简单，就是判断`XMLHttpRequest`这个对象存不存在，存在说明是出于浏览器环境，否则便是`node`环境。
+
+现在来看一下`xhrAdapter`
+```js
+function xhrAdapter(config) {
+  return new Promise(function dispatchXhrRequest(resolve, reject) {
+    var requestData = config.data;
+    var requestHeaders = config.headers;
+    var responseType = config.responseType;
+    var onCanceled;
+
+    // token 相关
+    function done() {
+      if (config.cancelToken) {
+        config.cancelToken.unsubscribe(onCanceled);
+      }
+
+      if (config.signal) {
+        config.signal.removeEventListener('abort', onCanceled);
+      }
+    }
+
+    // 不处理formData格式的header
+    if (utils.isFormData(requestData)) {
+      delete requestHeaders['Content-Type']; // Let the browser set it
+    }
+
+    // 起一个xml请求
+    var request = new XMLHttpRequest();
+    // http 基础鉴权
+    if (config.auth) {
+      var username = config.auth.username || '';
+      var password = config.auth.password
+        ? unescape(encodeURIComponent(config.auth.password))
+        : '';
+      requestHeaders.Authorization = 'Basic ' + btoa(username + ':' + password);
+    }
+
+    var fullPath = buildFullPath(config.baseURL, config.url);
+    // 建立连接
+    request.open(
+      config.method.toUpperCase(),
+      buildURL(fullPath, config.params, config.paramsSerializer),
+      true
+    );
+
+    // 设置timeout
+    request.timeout = config.timeout;
+
+    function onloadend() {
+      if (!request) {
+        return;
+      }
+      var responseHeaders =
+        'getAllResponseHeaders' in request
+          ? parseHeaders(request.getAllResponseHeaders())
+          : null;
+      var responseData =
+        !responseType || responseType === 'text' || responseType === 'json'
+          ? request.responseText
+          : request.response;
+      var response = {
+        data: responseData,
+        status: request.status,
+        statusText: request.statusText,
+        headers: responseHeaders,
+        config: config,
+        request: request,
+      };
+
+      settle(
+        function _resolve(value) {
+          resolve(value);
+          done();
+        },
+        function _reject(err) {
+          reject(err);
+          done();
+        },
+        response
+      );
+      request = null;
+    }
+
+    // 添加onloaded事件
+    if ('onloadend' in request) {
+      // Use onloadend if available
+      request.onloadend = onloadend;
+    } else {
+      // 通过readyState来模拟实现一个onloaded事件
+      request.onreadystatechange = function handleLoad() {
+        if (!request || request.readyState !== 4) {
+          return;
+        }
+        if (
+          request.status === 0 &&
+          !(request.responseURL && request.responseURL.indexOf('file:') === 0)
+        ) {
+          return;
+        }
+        setTimeout(onloadend);
+      };
+    }
+
+    // Handle browser request cancellation (as opposed to a manual cancellation)
+    request.onabort = function handleAbort() {
+      if (!request) {
+        return;
+      }
+
+      reject(createError('Request aborted', config, 'ECONNABORTED', request));
+
+      // Clean up request
+      request = null;
+    };
+
+    // Handle low level network errors
+    request.onerror = function handleError() {
+      // Real errors are hidden from us by the browser
+      // onerror should only fire if it's a network error
+      reject(createError('Network Error', config, null, request));
+
+      // Clean up request
+      request = null;
+    };
+
+    // Handle timeout
+    // 超时
+    request.ontimeout = function handleTimeout() {
+      var timeoutErrorMessage = config.timeout
+        ? 'timeout of ' + config.timeout + 'ms exceeded'
+        : 'timeout exceeded';
+      var transitional = config.transitional || defaults.transitional;
+      if (config.timeoutErrorMessage) {
+        timeoutErrorMessage = config.timeoutErrorMessage;
+      }
+      reject(
+        createError(
+          timeoutErrorMessage,
+          config,
+          transitional.clarifyTimeoutError ? 'ETIMEDOUT' : 'ECONNABORTED',
+          request
+        )
+      );
+
+      // Clean up request
+      request = null;
+    };
+
+    // xsrf相关
+    ...
+
+    // Add headers to the request
+    if ('setRequestHeader' in request) {
+      utils.forEach(requestHeaders, function setRequestHeader(val, key) {
+        if (
+          typeof requestData === 'undefined' &&
+          key.toLowerCase() === 'content-type'
+        ) {
+          // Remove Content-Type if data is undefined
+          delete requestHeaders[key];
+        } else {
+          // Otherwise add header to the request
+          request.setRequestHeader(key, val);
+        }
+      });
+    }
+
+    // Add withCredentials to request if needed
+    if (!utils.isUndefined(config.withCredentials)) {
+      request.withCredentials = !!config.withCredentials;
+    }
+
+    // Add responseType to request if needed
+    if (responseType && responseType !== 'json') {
+      request.responseType = config.responseType;
+    }
+
+    // Handle progress if needed
+    if (typeof config.onDownloadProgress === 'function') {
+      request.addEventListener('progress', config.onDownloadProgress);
+    }
+
+    // Not all browsers support upload events
+    if (typeof config.onUploadProgress === 'function' && request.upload) {
+      request.upload.addEventListener('progress', config.onUploadProgress);
+    }
+
+    if (config.cancelToken || config.signal) {
+      // Handle cancellation
+      // eslint-disable-next-line func-names
+      onCanceled = function (cancel) {
+        if (!request) {
+          return;
+        }
+        reject(
+          !cancel || (cancel && cancel.type) ? new Cancel('canceled') : cancel
+        );
+        // 取消请求
+        request.abort();
+        request = null;
+      };
+
+      config.cancelToken && config.cancelToken.subscribe(onCanceled);
+      if (config.signal) {
+        config.signal.aborted
+          ? onCanceled()
+          : config.signal.addEventListener('abort', onCanceled);
+      }
+    }
+
+    if (!requestData) {
+      requestData = null;
+    }
+
+    // Send the request
+    request.send(requestData);
+  });
+};
+```
