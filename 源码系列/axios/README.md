@@ -656,7 +656,7 @@ function xhrAdapter(config) {
     var responseType = config.responseType;
     var onCanceled;
 
-    // token 相关
+    // 请求完成了，取消cancel请求监听
     function done() {
       if (config.cancelToken) {
         config.cancelToken.unsubscribe(onCanceled);
@@ -665,11 +665,6 @@ function xhrAdapter(config) {
       if (config.signal) {
         config.signal.removeEventListener('abort', onCanceled);
       }
-    }
-
-    // 不处理formData格式的header
-    if (utils.isFormData(requestData)) {
-      delete requestHeaders['Content-Type']; // Let the browser set it
     }
 
     // 起一个xml请求
@@ -683,6 +678,7 @@ function xhrAdapter(config) {
       requestHeaders.Authorization = 'Basic ' + btoa(username + ':' + password);
     }
 
+    // 获取完整请求路径
     var fullPath = buildFullPath(config.baseURL, config.url);
     // 建立连接
     request.open(
@@ -691,9 +687,9 @@ function xhrAdapter(config) {
       true
     );
 
-    // 设置timeout
+    // 设置过期时间
     request.timeout = config.timeout;
-
+    // 请求完成
     function onloadend() {
       if (!request) {
         return;
@@ -715,6 +711,7 @@ function xhrAdapter(config) {
         request: request,
       };
 
+      // 根据response结果 resolve 或者 reject 一个 promise
       settle(
         function _resolve(value) {
           resolve(value);
@@ -729,9 +726,8 @@ function xhrAdapter(config) {
       request = null;
     }
 
-    // 添加onloaded事件
+    // 添加onloadend事件
     if ('onloadend' in request) {
-      // Use onloadend if available
       request.onloadend = onloadend;
     } else {
       // 通过readyState来模拟实现一个onloaded事件
@@ -748,30 +744,17 @@ function xhrAdapter(config) {
         setTimeout(onloadend);
       };
     }
-
-    // Handle browser request cancellation (as opposed to a manual cancellation)
     request.onabort = function handleAbort() {
       if (!request) {
         return;
       }
-
       reject(createError('Request aborted', config, 'ECONNABORTED', request));
-
-      // Clean up request
       request = null;
     };
-
-    // Handle low level network errors
     request.onerror = function handleError() {
-      // Real errors are hidden from us by the browser
-      // onerror should only fire if it's a network error
       reject(createError('Network Error', config, null, request));
-
-      // Clean up request
       request = null;
     };
-
-    // Handle timeout
     // 超时
     request.ontimeout = function handleTimeout() {
       var timeoutErrorMessage = config.timeout
@@ -789,50 +772,43 @@ function xhrAdapter(config) {
           request
         )
       );
-
-      // Clean up request
       request = null;
     };
 
     // xsrf相关
     ...
 
-    // Add headers to the request
+    // 把用户设置的请求头添加到request中
     if ('setRequestHeader' in request) {
       utils.forEach(requestHeaders, function setRequestHeader(val, key) {
         if (
           typeof requestData === 'undefined' &&
           key.toLowerCase() === 'content-type'
         ) {
-          // Remove Content-Type if data is undefined
+          // 当data为undefined时，移除头部
           delete requestHeaders[key];
         } else {
-          // Otherwise add header to the request
           request.setRequestHeader(key, val);
         }
       });
     }
 
-    // Add withCredentials to request if needed
-    if (!utils.isUndefined(config.withCredentials)) {
-      request.withCredentials = !!config.withCredentials;
-    }
-
-    // Add responseType to request if needed
+    // 响应数据类型
     if (responseType && responseType !== 'json') {
       request.responseType = config.responseType;
     }
 
-    // Handle progress if needed
+    // 下载进度监听
     if (typeof config.onDownloadProgress === 'function') {
       request.addEventListener('progress', config.onDownloadProgress);
     }
 
-    // Not all browsers support upload events
+    // 上传精度监听
     if (typeof config.onUploadProgress === 'function' && request.upload) {
       request.upload.addEventListener('progress', config.onUploadProgress);
     }
 
+    // 取消请求相关
     if (config.cancelToken || config.signal) {
       // Handle cancellation
       // eslint-disable-next-line func-names
@@ -860,8 +836,226 @@ function xhrAdapter(config) {
       requestData = null;
     }
 
-    // Send the request
+    // 发送请求
     request.send(requestData);
   });
 };
 ```
+
+整一个`xhrAdapter`适配器的原理非常简单，就是实例化一个`XMLHttpRequest`，将`config`中配置的多种参数添加到该实例上，同时对实例的多种事件进行监听。判断用户是否传入`cancelToken`，添加`cancel`回调，就是取消发送该请求。
+
+
+## `cancelToken`
+
+来看一下`cancelToken`如何使用以及`axios`如何实现取消请求。
+```js
+const cancelToken = axios.CancelToken;
+const source = cancelToken.source();
+
+axios
+  .get("http://localhost:3000/", {
+    cancelToken: source.token,
+  })
+  .then((res) => {
+    console.log(res);
+  })
+  .catch((err) => {
+    console.log(err);
+  });
+
+source.cancel("cancel by the user");
+```
+
+`source()`方法返回了一个包含了`CancelToken`的实例跟一个用于取消请求的函数。
+```js
+CancelToken.source = function source() {
+  var cancel;
+  var token = new CancelToken(function executor(c) {
+    cancel = c;
+  });
+  return {
+    token: token,
+    cancel: cancel,
+  };
+};
+```
+`cancel` 方法接收构造函数 `CancelToken` 内部的一个 `cancel` 函数，用于取消请求。
+```js
+function CancelToken(executor) {
+  // ...
+
+  var token = this;
+
+  // executor里边的参数函数就是cancel
+  executor(function cancel(message) {
+    if (token.reason) {
+      return;
+    }
+
+    token.reason = new Cancel(message);
+    resolvePromise(token.reason);
+  });
+}
+```
+当用户在取消请求执行`source.cancel(message)`的时候，会将`CancelToken`内部的`promise`状态变成`resolve`，这样就会调用`promise`的`then`方法，触发所有收集到的监听器（监听器是在`dispatchRequest`方法中加入的`onCanceled`，用于取消请求）。
+
+```js
+function CancelToken(executor) {
+  var resolvePromise;
+
+  // 创建了一个promise 拿到这个resolve
+  this.promise = new Promise(function promiseExecutor(resolve) {
+    // 设置的cancel message作为返回值
+    resolvePromise = resolve;
+  });
+
+  var token = this;
+
+  // 调用promise的then方法
+  this.promise.then(function (cancel) {
+    // 触发收集的监听器
+    if (!token._listeners) return;
+
+    var i;
+    var l = token._listeners.length;
+
+    for (i = 0; i < l; i++) {
+      token._listeners[i](cancel);
+    }
+    token._listeners = null;
+  });
+
+  // 给promise添加一个then方法，用于执行用户自定义的函数
+  this.promise.then = function (onfulfilled) {
+    var _resolve;
+
+    // eslint-disable-next-line func-names
+    var promise = new Promise(function (resolve) {
+      token.subscribe(resolve);
+      _resolve = resolve;
+    }).then(onfulfilled);
+
+    promise.cancel = function reject() {
+      token.unsubscribe(_resolve);
+    };
+
+    return promise;
+  };
+
+  ...
+}
+
+// 添加监听器，当已经触发了cancel方法后，不会将监听器加入栈中。
+CancelToken.prototype.subscribe = function subscribe(listener) {
+  // 触发结果
+  if (this.reason) {
+    listener(this.reason);
+    return;
+  }
+
+  if (this._listeners) {
+    this._listeners.push(listener);
+  } else {
+    this._listeners = [listener];
+  }
+};
+
+// 移除监听器
+CancelToken.prototype.unsubscribe = function unsubscribe(listener) {
+  if (!this._listeners) {
+    return;
+  }
+  var index = this._listeners.indexOf(listener);
+  if (index !== -1) {
+    this._listeners.splice(index, 1);
+  }
+};
+```
+
+
+## `httpAdapter`
+```js
+function httpAdapter() {
+  ...
+  
+  transport = isHttpsProxy ? httpsFollow : httpFollow;
+
+  ...
+
+  var req = transport.request(options, function handleResponse(res) {
+    if (req.aborted) return;
+
+    // 正常这个请求回来的时候就是流式的，IncomingMessage
+    // 下面的意思是在某几种数据格式情况下会将返回内容解压
+    var stream = res;
+    switch (res.headers['content-encoding']) {
+      /*eslint default-case:0*/
+      case 'gzip':
+      case 'compress':
+      case 'deflate':
+        stream =
+          res.statusCode === 204 ? stream : stream.pipe(zlib.createUnzip());
+        delete res.headers['content-encoding'];
+        break;
+    }
+
+    var lastRequest = res.req || req;
+
+    var response = {
+      status: res.statusCode,
+      statusText: res.statusMessage,
+      headers: res.headers,
+      config: config,
+      request: lastRequest,
+    };
+
+    if (config.responseType === 'stream') {
+      response.data = stream;
+      settle(resolve, reject, response);
+    } else {
+      var responseBuffer = [];
+      stream.on('data', function handleStreamData(chunk) {
+        responseBuffer.push(chunk);
+
+        if (
+          config.maxContentLength > -1 &&
+          Buffer.concat(responseBuffer).length > config.maxContentLength
+        ) {
+          stream.destroy();
+          reject(
+            createError(
+              'maxContentLength size of ' +
+                config.maxContentLength +
+                ' exceeded',
+              config,
+              null,
+              lastRequest
+            )
+          );
+        }
+      });
+
+      stream.on('error', function handleStreamError(err) {
+        if (req.aborted) return;
+        reject(enhanceError(err, config, null, lastRequest));
+      });
+
+      // 这里面就是关键的如何把流式的数据转化成字符串
+      stream.on('end', function handleStreamEnd() {
+        var responseData = Buffer.concat(responseBuffer);
+        if (config.responseType !== 'arraybuffer') {
+          responseData = responseData.toString(config.responseEncoding);
+        }
+
+        response.data = responseData;
+        settle(resolve, reject, response);
+      });
+    }
+  });
+}
+
+```
+
+根据当前协议头对应选用 `Follow Redirect` 中的 `http` 或 `https` 部分，这个模块其实就是原生 `http`、`https` 库上面封装了一层，支持重定向。
+
+至此，`axios`的源码解析就结束了。可以发现`axios`这个库非常精妙，采用`request`方法创建新实例来兼容多种写法；使用`promise`链式调用实现拦截器；通过适配浏览器和`node`，对外提供了统一的api等。
