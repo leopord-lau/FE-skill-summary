@@ -7,7 +7,7 @@ type walkerType = {
 
 // 打补丁
 function patch(node: Node, patches: keyMap): void {
-  let walker: walkerType = { index: domPatch.REPLACE };
+  let walker: walkerType = { index: 0 };
   dsfWalk(node, walker, patches);
 }
 

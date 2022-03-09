@@ -21,9 +21,10 @@ function dsfWalk(oldNode: Vlement | string, newNode: Vlement | string | null, in
     if(newNode !== oldNode) {
       diffList.push({ type: domPatch.TEXT, content: newNode });
     }
-  
+    
+  // 节点相同，比较标签内的属性
   } else if(newNode !== null && (<Vlement>oldNode).tagName === (<Vlement>newNode).tagName && (<Vlement>oldNode).key === (<Vlement>newNode).key) {
-    // 节点相同，比较标签内的属性
+    
     let diffProps: object | null = getDiffProps(<Vlement>oldNode, <Vlement>newNode);
     if(diffProps) {
       diffList.push({ type: domPatch.PROPS, props: diffProps });

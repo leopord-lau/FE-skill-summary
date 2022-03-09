@@ -621,3 +621,126 @@ module.exports = {
   },
 };
 ```
+
+## 代码分离
+代码分离可以用于获取更小的 `bundle`，以及控制资源加载优先级，如果使用合理，会极大影响加载时间。
+
+代码分离常用方式：
+- 入口起点：使用 `entry` 配置手动地分离代码。
+- 防止重复：使用 `Entry dependencies` 或者 `SplitChunksPlugin` 去重和分离 chunk。
+- 动态导入：通过模块的内联函数调用来分离代码。
+
+
+### 1. 入口起点
+需要在`entry`及`output`上进行配置
+```js
+module.exports = {
+  entry: {
+    index: "./src/index.js",
+    another: "./src/another.js",
+  },
+  output: {
+    filename: "[name].bundle.js",
+    path: path.resolve(__dirname, "dist"),
+    clean: true,
+  }
+};
+```
+但是这种方式存在一些问题，当多个文件同时引用了相同的模块时，这些模块都会被打包到对应的`chunk`中。而且这种方法不够灵活，并且不能动态地将核心应用程序逻辑中的代码拆分出来。
+
+
+### 2. 防止重复
+**入口依赖**
+
+配置`dependOn` 选项，这样可以在多个 `chunk` 之间共享模块。
+```js
+module.exports = {
+  entry: {
+    index: {
+      import: "./src/index.js",
+      dependOn: "sharedModule",
+    },
+    another: {
+      import: "./src/another.js",
+      dependOn: "sharedModule",
+    },
+    sharedModule: "./src/third-party.js",
+  },
+  output: {
+    filename: "[name].bundle.js",
+    path: path.resolve(__dirname, "dist"),
+    clean: true,
+  }
+};
+```
+共享模块会被单独打包成一个文件，在其他文件中被引用。
+
+
+存在多个共享模块时，`dependOn`可以配置成数组类型。
+```js
+module.exports = {
+  entry: {
+    index: {
+      import: "./src/index.js",
+      dependOn: ["sharedModule", "sharedLodash"],
+    },
+    another: {
+      import: "./src/another.js",
+      dependOn: ["sharedModule", "sharedLodash"],
+    },
+    sharedModule: "./src/third-party.js",
+    sharedLodash: "lodash",
+  },
+  output: {
+    filename: "[name].bundle.js",
+    path: path.resolve(__dirname, "dist"),
+    clean: true,
+  },
+};
+```
+
+### 3. 动态导入
+当涉及到动态代码拆分时，`webpack` 提供了两个类似的技术。第一种，也是推荐选择的方式是，使用符合 `ECMAScript` 提案 的 `import()` 语法 来实现动态导入。第二种，则是 `webpack` 的遗留功能，使用 `webpack` 特定的 `require.ensure`。
+
+通过`dynamic import`(动态导入) 来分离出一个 `chunk`.
+```js
+function getImport() {
+  return import("./module").then((module) => {
+    return module.default;
+  });
+}
+getImport().then((res) => {
+  console.log(res);
+});
+```
+
+
+
+## 模块热更新
+
+模块热替换(`HMR` - `hot module replacement`)功能会在应用程序运行过程中，替换、添加或删除 模块，而无需重新加载整个页面。主要是通过以下几种方式，来显著加快开发速度：
+
+- 保留在完全重新加载页面期间丢失的应用程序状态。
+- 只更新变更内容，以节省宝贵的开发时间。
+- 在源代码中 CSS/JS 产生修改时，会立刻在浏览器中进行更新，这几乎相当于在浏览器 devtools 直接更改样式。
+
+
+### [`watch mode`](https://webpack.docschina.org/configuration/watch/)
+使用 `npx webpack --watch`命令启动或者在`webpack.config.js`文件进入`watch`参数的配置。
+```js
+module.exports = {
+  watch: true,
+  watchOptions: {
+    ignored: /node_modules/,
+    aggregateTimeout: 300,
+    poll: 1000,
+  },
+};
+```
+它虽然能帮我们自动打包，但我们任然需要手动刷新浏览器，同时它不能帮我们在本地启动一个小型服务器，一些`http`请求不能通过。
+
+### webpack-dev-server
+安装
+```bash
+npm i webpack-dev-server --save-dev
+```

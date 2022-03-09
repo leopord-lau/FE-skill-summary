@@ -27,7 +27,536 @@
 
 ## 实现一个虚拟 DOM
 
-### 1. 解析`html`标签
+### 1. 定义`vlement`对象
+
+对于转换的虚拟`DOM`对象来说，至少需要保存标签名字、标签属性、子元素、渲染函数等属性。
+
+```js
+class Vlement {
+  // 元素id
+  id: number;
+  // 标签名字
+  tagName: string;
+  // 元素上的属性
+  props: keyMap;
+  // 节点开始位置
+  start?: number;
+  // 节点结束位置
+  end?: number;
+  // 用于标记节点
+  key: string;
+  // 子元素的个数
+  child_num: number;
+  // 子元素数组（子元素可能是text也可能是标签）
+  children: Array<Vlement | string>;
+  // 父元素
+  parent: Vlement | null;
+  // 渲染函数
+  _render: () => Element;
+  // diff算法
+  _diff: (oldNode: Vlement, newNode: Vlement) => object;
+
+  constructor(options: vlementOptions) {
+    this.id = id++;
+    this.tagName = options.tagName;
+    this.props = options.props;
+    this.start = options.start;
+    this.end = options.end;
+    if(this.props.key) {
+      this.key = options.props.key;
+    }
+    this.parent = options.parent;
+    this.child_num = 0;
+    this.children = []
+  }
+
+  addChild(child: Vlement | string) {
+    this.children.push(child);
+    this.child_num++;
+  }
+}
+```
+
+
+### 2. 创建虚拟`DOM`
+
+```js
+VirtualDom.prototype.$createElement = (options: vlementOptions): Vlement => {
+  return new Vlement(options);
+}
+```
+创建几个虚拟`dom`看看
+
+```js
+import VirtualDom from "./vdom/index";
+
+const vd = new VirtualDom();
+
+var el = vd.$createElement;
+let div = el({
+  tagName: 'div',
+  props: {},
+  parent: null
+})
+div.addChild('this is a div tag');
+
+console.log(div)
+```
+
+![](./images/create-virtual-dom.png)
+
+
+### 3. 将虚拟`DOM`转换成真实节点
+
+回想一下我们的虚拟`DOM`对象具有属性，有标签名，那么不就可以通过`document.createElement(tagName)`创建一个真实节点然后将属性那些都加到标签上去，之后在使用深度遍历将子元素也转换成真实节点。
+
+```js
+Vlement.prototype._render = function () {
+  let el: Element = document.createElement(this.tagName);
+  let props: keyMap = this.props;
+  for(let name in props) {
+    let value: string = props[name];
+    el.setAttribute(name, value);
+  }
+
+  let children: Array<Vlement | string> = this.children;
+  children.forEach(function(child: Vlement | string) {
+    // 判断子节点是否是文本节点，考虑到之后我们需要将真实节点解析成虚拟节点，需要对特殊字符进行处理
+    let child_el: Element | Text = (child instanceof Vlement) ? child._render() : document.createTextNode(_renderToStringEntity(child));
+    el.appendChild(child_el);
+  })
+  return el;
+}
+
+const _renderToStringEntity = function(str: string): string {
+  var arrEntities: keyMap ={'lt':'<','gt':'>','nbsp':' ','amp':'&','quot':'"'};
+  return str.replace(/&(lt|gt|nbsp|amp|quot);/ig,function(all,t){return arrEntities[t];});
+}
+```
+
+将元素转成真实节点就可以插入页面中了。
+
+```js
+import VirtualDom from "./vdom/index";
+
+const vd = new VirtualDom();
+
+var el = vd.$createElement;
+let div = el({
+  tagName: 'div',
+  props: {},
+  parent: null
+})
+div.addChild('this is a div tag');
+document.body.appendChild(div);
+```
+
+![](images/插入节点.png)
+
+至此，我们已经完成了虚拟`DOM`并进行了渲染真实`DOM`到页面中部分，下面就是`diff`算法了。
+
+## `diff`算法
+
+这个算法简单说就是比较两个虚拟`DOM`的区别，通过创建一个补丁，来描述两者的区别，之后用该补丁来更新。
+
+```js
+function diff(oldNode: Vlement, newNode: Vlement): keyMap {
+  let index: number = 0;
+  // 用于存储差异节点
+  let difference: keyMap = {};
+  // 深度遍历
+  dsfWalk(oldNode, newNode, index, difference);
+  return difference;
+}
+```
+
+在写代码之前，我们先总结一下可能存在的差异类型
+
+1. 文本内容差异
+2. 属性差异
+3. 节点差异
+   - 节点顺序被调换
+   - 节点被替换
+   - 新增节点
+   - 删除节点
+
+
+根据上面总结的差异类型，我们来写一下方法。当然，采用的是深度遍历的方式。
+```js
+function dsfWalk(oldNode: Vlement | string, newNode: Vlement | string | null, index: number, difference: keyMap): void {
+  // 用于暂时存储差异节点(标记差异类型(文本内容差异，属性差异，节点顺序差异))
+  const diffList: Array<moveMap> = [];
+  if((typeof oldNode === "string") && (typeof newNode === "string")) {
+    // 替换文本
+    if(newNode !== oldNode) {
+      diffList.push({ type: domPatch.TEXT, content: newNode });
+    }
+  
+  // 节点相同，比较标签内的属性
+  } else if(newNode !== null && (<Vlement>oldNode).tagName === (<Vlement>newNode).tagName && (<Vlement>oldNode).key === (<Vlement>newNode).key) {
+    
+    // 比较属性
+    let diffProps: object | null = getDiffProps(<Vlement>oldNode, <Vlement>newNode);
+    if(diffProps) {
+      diffList.push({ type: domPatch.PROPS, props: diffProps });
+    }
+
+    // 子节点比较
+    if(!isIgnoreChildren(<Vlement>newNode)) {
+      diffChildren(
+        (<Vlement>oldNode).children,
+        (<Vlement>newNode).children,
+        index,
+        difference,
+        diffList
+      )
+    }
+  
+  // 节点不同，直接替换
+  } else if(newNode !== null) {
+    diffList.push({type: domPatch.REPLACE, node: <Vlement>newNode});
+  }
+
+  // 记录当前节点的所有差异
+  if(diffList.length) {
+    difference[index] = diffList;
+  }
+}
+```
+在虚拟节点中我们可以对`dom`进行多次操作，最后进行`patch`后渲染成真实节点从而减少重绘和回流。
+
+采用深度遍历方式遍历新旧节点，使用一个`stack`来记录变化。
+
+主要分为几部分：
+
+1. 文本内容差异： 直接替换掉当前的内容；
+
+```js
+if (typeof oldNode === 'string' && typeof newNode === 'string') {
+  // 替换文本
+  if (newNode !== oldNode) {
+    diffList.push({ type: domPatch.TEXT, content: newNode });
+  }
+}
+```
+
+2. 属性差异：当当前标签相同时，比较标签内的属性及其子节点。
+
+```js
+let diffProps: object | null = getDiffProps(<Vlement>oldNode, <Vlement>newNode);
+
+if(diffProps) {
+  diffList.push({ type: domPatch.PROPS, props: diffProps });
+}
+
+// 子节点比较
+if(!isIgnoreChildren(<Vlement>newNode)) {
+  diffChildren(
+    (<Vlement>oldNode).children,
+    (<Vlement>newNode).children,
+    index,
+    difference,
+    diffList
+  )
+}
+```
+
+3. 节点差异
+
+`getDiffProps` 获取新旧节点中不同的属性。
+
+```js
+// 获取新节点中新增或与旧节点不同的属性
+function getDiffProps(oldNode: Vlement, newNode: Vlement): keyMap | null {
+  // 记录不同属性的数量
+  let count: number = 0;
+  // 旧节点所有属性
+  let oldProps: keyMap = oldNode.props;
+  // 新节点所有属性
+  let newProps: keyMap = newNode.props;
+  // 保存新旧节点中不同的属性
+  let diffProps: keyMap = {};
+  let key: string;
+
+  // 遍历旧节点中的所有属性，判断新旧节点中属性情况
+  for (key in oldProps) {
+    if (newProps[key] !== oldProps[key]) {
+      count++;
+      diffProps[key] = newProps[key];
+    }
+  }
+
+  // 新增属性
+  for (key in newProps) {
+    if (!oldProps.hasOwnProperty(key)) {
+      count++;
+      diffProps[key] = newProps[key];
+    }
+  }
+
+  if (count === 0) {
+    return null;
+  }
+  return diffProps;
+}
+```
+
+`getDiffChildren` 比较新旧子节点。
+
+```js
+function diffChildren(oldChildList: Array<Vlement | string>, newChildList: Array<Vlement| string | null> , index: number, difference: keyMap, diffList: Array<moveMap>): void {
+  let diffMap: diffMap = getDiffList(oldChildList, newChildList, "key");
+  newChildList = diffMap.children;
+
+  if(diffMap.moveList.length) {
+    let reorderPatch: moveMap = { type: domPatch.REORDER, moves: diffMap.moveList };
+    diffList.push(reorderPatch);
+  }
+
+  let leftNode: Vlement | string;
+  let currentNodeIndex: number = index;
+
+  oldChildList.forEach((child, i) => {
+    let newChild: Vlement | string | null = newChildList[i];
+    currentNodeIndex = (leftNode && (<Vlement>leftNode).child_num) ? currentNodeIndex + (<Vlement>leftNode).child_num + 1 : currentNodeIndex + 1;
+    dsfWalk(child, newChild, currentNodeIndex, difference);
+    leftNode = child;
+  })
+}
+```
+
+`getDiffList` 新旧节点子节点对比。使用`key`来标识节点，可以加快`diff`。
+
+```js
+function getDiffList(oldChildList: Array<Vlement | string>, newChildList: Array<Vlement | string | null>, key: string): diffMap {
+  // 获取有一个有key标识的节点索引跟无key标识的节点数组对象
+  let oldMap: KeyIndexAndFree = markKeyIndexAndFree(oldChildList, key);
+  let newMap: KeyIndexAndFree = markKeyIndexAndFree(newChildList, key);
+
+  // 获取带有key值的节点索引
+  let oldKeyIndex: keyMap = oldMap.keyIndex;
+  let newKeyIndex: keyMap = newMap.keyIndex;
+
+  let i: number = 0;
+  let item: Vlement | string | null;
+  let itemKey: string | undefined;
+  // 新旧节点差异patch数组
+  let children: Array<Vlement | string | null> = [];
+
+  // 无key值节点游标
+  let freeIndex: number = 0;
+  // 获取新节点中不带key值的所有节点
+  let newFree: Array<Vlement | string> = newMap.free;
+  let moveList:Array<moveMap> = [];
+
+  // 循环遍历旧节点
+  while(i < oldChildList.length) {
+    item = oldChildList[i];
+    itemKey = getItemKey(item, key);
+    // 旧节点中存在key值
+    if(itemKey) {
+      // 新节点中不存在这个key，说明被删除了
+      if(!newKeyIndex.hasOwnProperty(itemKey)) {
+        // null 代表删除
+        children.push(null);
+      // 新节点中存在key
+      } else {
+        // 新节点中存在带有这个key的节点，获取这个节点的索引
+        let newItemIndex: number = newKeyIndex[itemKey];
+        children.push(newChildList[newItemIndex]);
+      }
+    // 旧节点不存在key，根据旧节点的个数将新节点逐个添加到数组中，当新节点个数比旧节点多时就会有节点添加到数组中
+    } else {
+      let freeItem: Vlement | string = newFree[freeIndex++];
+      if(freeItem) {
+        children.push(freeItem);
+      } else {
+        children.push(null);
+      }
+    }
+    i++;
+  }
+
+  let copyList: Array<Vlement | string | null> = children.slice(0);
+  // 重置
+  i = 0;
+  // 获取旧节点需要移除的节点数组
+  while(i < copyList.length) {
+    if(copyList[i] === null) {
+      _remove(i);
+      _removeCopy(i);
+    } else {
+      i++;
+    }
+  }
+
+  // 游标，一个用于新节点的子节点，另一个用于旧节点跟新节点对比后获取的节点列表
+  let j: number = i = 0;
+
+  while(i < newChildList.length) {
+    item = newChildList[i];
+    itemKey = getItemKey(item, key);
+
+    let copyItem: Vlement | string | null = copyList[j];
+    let copyItemKey: string | undefined = getItemKey(copyItem!, key);
+
+    if(copyItem) {
+      if(itemKey === copyItemKey) {
+        j++;
+      } else {
+        // 旧节点中不存在，就直接插入(不存在对应的key，也直接添加)
+        if(!oldKeyIndex.hasOwnProperty(itemKey!)) {
+          _insert(i, item!);
+        } else {
+          let nextItemKey: string | undefined = getItemKey(copyItemKey![j + 1], key);
+          if(nextItemKey === itemKey) {
+            _remove(i);
+            _removeCopy(j);
+            j++;
+          } else {
+            _insert(i, item!);
+          }
+        }
+      }
+    } else {
+      _insert(i, item!);
+    }
+    i++;
+  }
+
+  let left: number = copyList.length - j;
+  while(j++ < copyList.length) {
+    left--;
+    _remove(left + i);
+  }
+
+
+  function _remove(index: number): void {
+    moveList.push({index: index, type: domPatch.REMOVE});
+  }
+  function _removeCopy(index: number): void {
+    copyList.splice(index, 1);
+  }
+  function _insert(index: number, item: Vlement | string): void {
+    moveList.push({index: index, item: item, type: domPatch.ADD});
+  }
+
+  return {
+    moveList: moveList,
+    children: children
+  }
+}
+```
+
+3. 新增节点，直接添加该节点
+
+```js
+if(newNode !== null) {
+  diffList.push({type: domPatch.REPLACE, node: <Vlement>newNode});
+}
+```
+
+获取了新旧节点的差异（替换、重排、属性差异、文本差异）后进行`patch`操作。
+`patch`方法的第一个参数是真实根节点，`patches`则是新旧节点对比后得出的差异。同样采用深度遍历的方式。
+
+## `patch`
+
+同样采用深度遍历的方式将子节点全部打上补丁。
+
+```js
+function patch(node: Node, patches: keyMap): void {
+  let walker: walkerType = { index: domPatch.REPLACE };
+  dsfWalk(node, walker, patches);
+}
+
+// 深度遍历
+function dsfWalk(node: Node, walker: walkerType, patches: keyMap): void {
+  // 获取patch数组
+  const currentPatches: Array<moveMap> = patches[walker.index];
+  const len: number = node.childNodes ? node.childNodes.length : 0;
+
+  for (let i: number = 0; i < len; i++) {
+    let child: Node = node.childNodes[i];
+    walker.index++;
+    dsfWalk(child, walker, patches);
+  }
+
+  if (currentPatches) {
+    startPatches(node, currentPatches);
+  }
+}
+```
+
+根据不同的差异类型进行不同的操作。
+
+```js
+function startPatches(node: Node, currentPatches: Array<moveMap>): void {
+  currentPatches.forEach(currentPatch => {
+    switch (currentPatch.type) {
+      case domPatch.REPLACE:
+        const newNode = (typeof currentPatch.node === 'string') ? document.createTextNode(currentPatch.node) : currentPatch.node!._render();
+        node.parentNode!.replaceChild(newNode, node);
+        break;
+      case domPatch.REORDER:
+        reorderChildren(node, currentPatch.moves!);
+        break;
+      case domPatch.PROPS:
+        setProps(node, currentPatch.props!);
+        break;
+      case domPatch.TEXT:
+        node.textContent = currentPatch.content!
+        break
+      default:
+        throw new Error('Unknown patch type ' + currentPatch.type)
+    }
+  })
+}
+```
+
+`reorderChildren` 重新排序
+
+```js
+// 重新排列
+function reorderChildren(node: Node, moveList: Array<moveMap>): void {
+  let staticNodeList: Array<any> = Array.prototype.slice.call(node.childNodes);
+  let keyMap: keyMap = {};
+
+  staticNodeList.forEach(node => {
+    // 元素节点
+    if(node.nodeType === 1) {
+      const key: string | null = (<Element>node).getAttribute('key');
+      if(key) {
+        keyMap[key] = node;
+      }
+    }
+  })
+
+  moveList.forEach(move => {
+    const i: number | undefined = move.index;
+    if(!i) return;
+    // 移除节点
+    if(move.type === domPatch.REMOVE) {
+      if(staticNodeList[i] === node.childNodes[i]) {
+        node.removeChild(node.childNodes[i]);
+      }
+      staticNodeList.splice(i, 1);
+    } else if(move.type === domPatch.ADD) {
+      const newNode: Node = keyMap[(<Vlement>move.item).key]
+        ? keyMap[(<Vlement>move.item).key].cloneNode(true)
+        : typeof (<string>move.item) === 'string'
+          ? document.createTextNode(<string>move.item)
+          : (<Vlement>move.item)._render();
+
+      staticNodeList.splice(i, 0, newNode);
+      node.insertBefore(newNode, node.childNodes[i] || null);
+    }
+  })
+}
+```
+
+至此，整个虚拟`DOM`的处理流程都完成了，下面我们就来看看如何将模板渲染成虚拟`DOM`。
+
+## `parse`
 
 将`html`中的标签进行解析，转换成对象格式。
 
@@ -355,408 +884,11 @@ text(content: string, startIndex: number, endIndex: number) {
 
 到这里为止，从`html`标签解析成为虚拟节点的流程就完成了。
 
-### 2. 虚拟节点
+## 总结
 
-虚拟节点就是使用一个对象描述标签状态。
-
-```js
-class Vlement {
-  id: number;
-  tagName: string;
-  props: keyMap;
-  // 节点开始位置
-  start?: number;
-  // 节点结束位置
-  end?: number;
-  // 用于标记节点
-  key: string;
-  child_num: number;
-  children: Array<Vlement | string>;
-  parent: Vlement | null;
-  _render: () => Element;
-  _diff: (oldNode: Vlement, newNode: Vlement) => object;
-
-  constructor(options: vlementOptions) {
-    this.id = id++;
-    this.tagName = options.tagName;
-    this.props = options.props;
-    this.start = options.start;
-    this.end = options.end;
-    if(this.props.key) {
-      this.key = options.props.key;
-    }
-    this.parent = options.parent;
-    this.child_num = 0;
-    this.children = []
-  }
-
-  addChild(child: Vlement | string) {
-    this.children.push(child);
-    this.child_num++;
-  }
-}
-```
-
-同时提供了一个`_render`方法用于将虚拟节点节点转换成真实`dom`节点。
-
-```js
-Vlement.prototype._render = function () {
-  let el: Element = document.createElement(this.tagName);
-  let props: keyMap = this.props;
-  for (let name in props) {
-    let value: string = props[name];
-    el.setAttribute(name, value);
-  }
-
-  let children: Array<Vlement | string> = this.children;
-  children.forEach(function (child: Vlement | string) {
-    let child_el: Element | Text =
-      child instanceof Vlement
-        ? child._render()
-        : document.createTextNode(_renderToStringEntity(child));
-    el.appendChild(child_el);
-  });
-  return el;
-};
-
-// 解析特殊字符
-const _renderToStringEntity = function (str: string): string {
-  var arrEntities: keyMap = {
-    lt: '<',
-    gt: '>',
-    nbsp: ' ',
-    amp: '&',
-    quot: '"',
-  };
-  return str.replace(/&(lt|gt|nbsp|amp|quot);/gi, function (all, t) {
-    return arrEntities[t];
-  });
-};
-```
-
-在虚拟节点中我们可以对`dom`进行多次操作，最后进行`patch`后渲染成真实节点从而减少重绘和回流。
-
-采用深度遍历方式遍历新旧节点，使用一个`stack`来记录变化。
-
-主要分为几部分：
-
-1. 文本内容差异： 直接替换掉当前的内容；
-
-```js
-if (typeof oldNode === 'string' && typeof newNode === 'string') {
-  // 替换文本
-  if (newNode !== oldNode) {
-    diffList.push({ type: domPatch.TEXT, content: newNode });
-  }
-}
-```
-
-2. 属性差异：当当前标签相同时，比较标签内的属性及其子节点。
-
-```js
-let diffProps: object | null = getDiffProps(<Vlement>oldNode, <Vlement>newNode);
-
-if(diffProps) {
-  diffList.push({ type: domPatch.PROPS, props: diffProps });
-}
-
-// 子节点比较
-if(!isIgnoreChildren(<Vlement>newNode)) {
-  diffChildren(
-    (<Vlement>oldNode).children,
-    (<Vlement>newNode).children,
-    index,
-    difference,
-    diffList
-  )
-}
-```
-
-`getDiffProps` 获取新旧节点中不同的属性。
-
-```js
-// 获取新节点中新增或与旧节点不同的属性
-function getDiffProps(oldNode: Vlement, newNode: Vlement): keyMap | null {
-  // 记录不同属性的数量
-  let count: number = 0;
-  // 旧节点所有属性
-  let oldProps: keyMap = oldNode.props;
-  // 新节点所有属性
-  let newProps: keyMap = newNode.props;
-  // 保存新旧节点中不同的属性
-  let diffProps: keyMap = {};
-  let key: string;
-
-  // 遍历旧节点中的所有属性，判断新旧节点中属性情况
-  for (key in oldProps) {
-    if (newProps[key] !== oldProps[key]) {
-      count++;
-      diffProps[key] = newProps[key];
-    }
-  }
-
-  // 新增属性
-  for (key in newProps) {
-    if (!oldProps.hasOwnProperty(key)) {
-      count++;
-      diffProps[key] = newProps[key];
-    }
-  }
-
-  if (count === 0) {
-    return null;
-  }
-  return diffProps;
-}
-```
-
-`getDiffChildren` 比较新旧子节点。
-
-```js
-function diffChildren(oldChildList: Array<Vlement | string>, newChildList: Array<Vlement| string | null> , index: number, difference: keyMap, diffList: Array<moveMap>): void {
-  let diffMap: diffMap = getDiffList(oldChildList, newChildList, "key");
-  newChildList = diffMap.children;
-
-  if(diffMap.moveList.length) {
-    let reorderPatch: moveMap = { type: domPatch.REORDER, moves: diffMap.moveList };
-    diffList.push(reorderPatch);
-  }
-
-  let leftNode: Vlement | string;
-  let currentNodeIndex: number = index;
-
-  oldChildList.forEach((child, i) => {
-    let newChild: Vlement | string | null = newChildList[i];
-    currentNodeIndex = (leftNode && (<Vlement>leftNode).child_num) ? currentNodeIndex + (<Vlement>leftNode).child_num + 1 : currentNodeIndex + 1;
-    dsfWalk(child, newChild, currentNodeIndex, difference);
-    leftNode = child;
-  })
-}
-```
-
-`getDiffList` 新旧节点子节点对比。使用`key`来标识节点，可以加快`diff`。
-
-```js
-function getDiffList(oldChildList: Array<Vlement | string>, newChildList: Array<Vlement | string | null>, key: string): diffMap {
-  // 获取有一个有key标识的节点索引跟无key标识的节点数组对象
-  let oldMap: KeyIndexAndFree = markKeyIndexAndFree(oldChildList, key);
-  let newMap: KeyIndexAndFree = markKeyIndexAndFree(newChildList, key);
-
-  // 获取带有key值的节点索引
-  let oldKeyIndex: keyMap = oldMap.keyIndex;
-  let newKeyIndex: keyMap = newMap.keyIndex;
-
-  let i: number = 0;
-  let item: Vlement | string | null;
-  let itemKey: string | undefined;
-  // 新旧节点差异patch数组
-  let children: Array<Vlement | string | null> = [];
-
-  // 无key值节点游标
-  let freeIndex: number = 0;
-  // 获取新节点中不带key值的所有节点
-  let newFree: Array<Vlement | string> = newMap.free;
-  let moveList:Array<moveMap> = [];
-
-  // 循环遍历旧节点
-  while(i < oldChildList.length) {
-    item = oldChildList[i];
-    itemKey = getItemKey(item, key);
-    // 旧节点中存在key值
-    if(itemKey) {
-      // 新节点中不存在这个key，说明被删除了
-      if(!newKeyIndex.hasOwnProperty(itemKey)) {
-        // null 代表删除
-        children.push(null);
-      // 新节点中存在key
-      } else {
-        // 新节点中存在带有这个key的节点，获取这个节点的索引
-        let newItemIndex: number = newKeyIndex[itemKey];
-        children.push(newChildList[newItemIndex]);
-      }
-    // 旧节点不存在key，根据旧节点的个数将新节点逐个添加到数组中，当新节点个数比旧节点多时就会有节点添加到数组中
-    } else {
-      let freeItem: Vlement | string = newFree[freeIndex++];
-      if(freeItem) {
-        children.push(freeItem);
-      } else {
-        children.push(null);
-      }
-    }
-    i++;
-  }
-
-  let copyList: Array<Vlement | string | null> = children.slice(0);
-  // 重置
-  i = 0;
-  // 获取旧节点需要移除的节点数组
-  while(i < copyList.length) {
-    if(copyList[i] === null) {
-      _remove(i);
-      _removeCopy(i);
-    } else {
-      i++;
-    }
-  }
-
-  // 游标，一个用于新节点的子节点，另一个用于旧节点跟新节点对比后获取的节点列表
-  let j: number = i = 0;
-
-  while(i < newChildList.length) {
-    item = newChildList[i];
-    itemKey = getItemKey(item, key);
-
-    let copyItem: Vlement | string | null = copyList[j];
-    let copyItemKey: string | undefined = getItemKey(copyItem!, key);
-
-    if(copyItem) {
-      if(itemKey === copyItemKey) {
-        j++;
-      } else {
-        // 旧节点中不存在，就直接插入(不存在对应的key，也直接添加)
-        if(!oldKeyIndex.hasOwnProperty(itemKey!)) {
-          _insert(i, item!);
-        } else {
-          let nextItemKey: string | undefined = getItemKey(copyItemKey![j + 1], key);
-          if(nextItemKey === itemKey) {
-            _remove(i);
-            _removeCopy(j);
-            j++;
-          } else {
-            _insert(i, item!);
-          }
-        }
-      }
-    } else {
-      _insert(i, item!);
-    }
-    i++;
-  }
-
-  let left: number = copyList.length - j;
-  while(j++ < copyList.length) {
-    left--;
-    _remove(left + i);
-  }
-
-
-  function _remove(index: number): void {
-    moveList.push({index: index, type: domPatch.REMOVE});
-  }
-  function _removeCopy(index: number): void {
-    copyList.splice(index, 1);
-  }
-  function _insert(index: number, item: Vlement | string): void {
-    moveList.push({index: index, item: item, type: domPatch.ADD});
-  }
-
-  return {
-    moveList: moveList,
-    children: children
-  }
-}
-```
-
-3. 新增节点，直接添加该节点
-
-```js
-if(newNode !== null) {
-  diffList.push({type: domPatch.REPLACE, node: <Vlement>newNode});
-}
-```
-
-获取了新旧节点的差异（替换、重排、属性差异、文本差异）后进行`patch`操作。
-`patch`方法的第一个参数是真实根节点，`patches`则是新旧节点对比后得出的差异。同样采用深度遍历的方式。
-
-```js
-function patch(node: Node, patches: keyMap): void {
-  let walker: walkerType = { index: domPatch.REPLACE };
-  dsfWalk(node, walker, patches);
-}
-
-// 深度遍历
-function dsfWalk(node: Node, walker: walkerType, patches: keyMap): void {
-  // 获取patch数组
-  const currentPatches: Array<moveMap> = patches[walker.index];
-  const len: number = node.childNodes ? node.childNodes.length : 0;
-
-  for (let i: number = 0; i < len; i++) {
-    let child: Node = node.childNodes[i];
-    walker.index++;
-    dsfWalk(child, walker, patches);
-  }
-
-  if (currentPatches) {
-    startPatches(node, currentPatches);
-  }
-}
-```
-
-根据不同的差异类型进行不同的操作。
-
-```js
-function startPatches(node: Node, currentPatches: Array<moveMap>): void {
-  currentPatches.forEach(currentPatch => {
-    switch (currentPatch.type) {
-      case domPatch.REPLACE:
-        const newNode = (typeof currentPatch.node === 'string') ? document.createTextNode(currentPatch.node) : currentPatch.node!._render();
-        node.parentNode!.replaceChild(newNode, node);
-        break;
-      case domPatch.REORDER:
-        reorderChildren(node, currentPatch.moves!);
-        break;
-      case domPatch.PROPS:
-        setProps(node, currentPatch.props!);
-        break;
-      case domPatch.TEXT:
-        node.textContent = currentPatch.content!
-        break
-      default:
-        throw new Error('Unknown patch type ' + currentPatch.type)
-    }
-  })
-}
-```
-
-`reorderChildren` 重新排序
-
-```js
-// 重新排列
-function reorderChildren(node: Node, moveList: Array<moveMap>): void {
-  let staticNodeList: Array<any> = Array.prototype.slice.call(node.childNodes);
-  let keyMap: keyMap = {};
-
-  staticNodeList.forEach(node => {
-    // 元素节点
-    if(node.nodeType === 1) {
-      const key: string | null = (<Element>node).getAttribute('key');
-      if(key) {
-        keyMap[key] = node;
-      }
-    }
-  })
-
-  moveList.forEach(move => {
-    const i: number | undefined = move.index;
-    if(!i) return;
-    // 移除节点
-    if(move.type === domPatch.REMOVE) {
-      if(staticNodeList[i] === node.childNodes[i]) {
-        node.removeChild(node.childNodes[i]);
-      }
-      staticNodeList.splice(i, 1);
-    } else if(move.type === domPatch.ADD) {
-      const newNode: Node = keyMap[(<Vlement>move.item).key]
-        ? keyMap[(<Vlement>move.item).key].cloneNode(true)
-        : typeof (<string>move.item) === 'string'
-          ? document.createTextNode(<string>move.item)
-          : (<Vlement>move.item)._render();
-
-      staticNodeList.splice(i, 0, newNode);
-      node.insertBefore(newNode, node.childNodes[i] || null);
-    }
-  })
-}
-```
+1. 用JS对象模拟DOM（虚拟DOM）
+2. 把此虚拟DOM转成真实DOM并插入页面中（render）
+3. 如果有事件发生修改了虚拟DOM，比较两棵虚拟DOM树的差异，得到差异对象（diff）
+4. 把差异对象应用到真正的DOM树上（patch）
 
 至此，相关原理已经讲解完了，查看源代码:[https://github.com/leopord-lau/vdom](https://github.com/leopord-lau/vdom)
